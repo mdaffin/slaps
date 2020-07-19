@@ -17,3 +17,10 @@
 #![warn(missing_docs)]
 #![warn(missing_copy_implementations)]
 #![warn(missing_debug_implementations)]
+
+mod clap;
+mod readline;
+mod shlex;
+
+/// Interactive shell using an existing Clap/StructOpt config.
+pub struct Slaps {}
