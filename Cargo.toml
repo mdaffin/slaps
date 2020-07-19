@@ -1,0 +1,15 @@
+[package]
+authors = ["rd <slaps@megane.space>"]
+categories = ["command-line-utilities"]
+description = "Interactive shell interface using your existing Clap/StructOpt config"
+keywords = ["cli", "interactive", "clap", "structopt"]
+license = "WTFPL"
+name = "slaps"
+readme = "README.md"
+repository = "https://github.com/tjg1/slaps"
+version = "0.1.0"
+
+[dependencies]
+
+[dev-dependencies]
+rusty-hook = "^0.11.2"

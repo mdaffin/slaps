@@ -1,0 +1,1 @@
+Add an interactive shell mode to your Rust command-line application using your existing Clap/StructOpt configuration.
