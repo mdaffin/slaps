@@ -20,7 +20,5 @@
 
 mod clap;
 mod readline;
-mod shlex;
-
-/// Interactive shell using an existing Clap/StructOpt config.
-pub struct Slaps {}
+/// Splitting strings into fields in accordance with Unix shell rules.
+pub mod shlex;
