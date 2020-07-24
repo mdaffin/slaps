@@ -20,36 +20,33 @@
 
 mod clap;
 mod config;
+mod error;
 mod readline;
-/// Splitting strings into fields in accordance with Unix shell rules.
+#[doc(hidden)]
 pub mod shlex;
 
-use crate::readline::Readline;
 pub use config::{ColorMode, CompletionType, Config};
-pub use readline::Error as ReadlineError;
+pub use error::{ClapError, Error, ErrorKind, MismatchedQuotes, ReadlineError};
 
 /// Interactive shell mode using a `clap`/`structopt` configuration.
 #[derive(Debug)]
-pub struct Slaps<'a> {
-    config: Config<'a>,
-    readline: readline::Readline,
+pub struct Slaps<'a, 'b> {
+    config: Config<'b>,
+    matcher: clap::Matcher<'a, 'b>,
 }
 
-impl<'a> Slaps<'a> {
+impl<'a, 'b> Slaps<'a, 'b> {
     /// Creates a new interactive app using the default configuration.
     ///
     /// # Examples
     /// ```
     /// use slaps::Slaps;
     ///
-    /// let slaps = Slaps::new();
+    /// let slaps = Slaps::with_name("slaps");
     /// ```
     #[must_use]
-    pub fn new() -> Self {
-        let config = Config::default();
-        let readline = Readline::with_config(&config);
-
-        Slaps { config, readline }
+    pub fn with_name(name: &str) -> Self {
+        Self::with_name_and_config(name, Config::default())
     }
 
     /// Creates a new interactive app with the given `Config`.
@@ -58,61 +55,96 @@ impl<'a> Slaps<'a> {
     /// ```
     /// use slaps::{Config, ColorMode, Slaps};
     ///
-    /// let slaps = Slaps::with_config(Config::default().color_mode(ColorMode::Disabled));
+    /// let slaps = Slaps::with_name_and_config("slaps", Config::default()
+    ///     .color_mode(ColorMode::Disabled));
     /// ```
     #[must_use]
-    pub fn with_config(config: Config<'a>) -> Self {
-        let readline = Readline::with_config(&config);
-
-        Slaps { config, readline }
+    pub fn with_name_and_config(name: &str, config: Config<'b>) -> Slaps<'a, 'b> {
+        Slaps {
+            config,
+            matcher: clap::Matcher::with_name_and_config(name, config),
+        }
     }
 
-    /// Prompts the user for input using the default prompt.
+    /// Registers a Clap subcommand configuration with Slaps.
+    ///
+    /// # Examples
+    /// ```
+    /// use clap::App;
+    /// use slaps::Slaps;
+    ///
+    /// let slaps = Slaps::with_name("slaps").subcommand(App::new("slap"));
+    /// ```
+    #[must_use]
+    pub fn subcommand(mut self, command: clap::App<'a, 'a>) -> Self {
+        self.matcher.register_command(command);
+
+        self
+    }
+
+    /// Prompts the user for a `String` using the default prompt.
+    ///
+    /// If prompt is None, uses the default from the [`Config`].
     ///
     /// # Errors
     /// May return a [`ReadlineError`] from the internal readline implementation.
-    pub fn prompt_line(&mut self) -> Result<String, readline::Error> {
-        self.readline.prompt_line(self.config.prompt)
+    pub fn prompt_line(&self, prompt: Option<&str>) -> Result<String, ReadlineError> {
+        readline::Readline::new(self.config).prompt_line(prompt.unwrap_or(self.config.prompt))
     }
 
-    /// Prompts the user for a password using the default password prompt.
+    /// Prompts the user for a password.
+    ///
+    /// If prompt is None, uses the default from the [`Config`].
     ///
     /// # Errors
     /// May return a [`ReadlineError`] from the internal readline implementation.
-    pub fn prompt_password(&mut self) -> Result<String, readline::Error> {
-        Readline::prompt_password(self.config.password_prompt)
+    pub fn prompt_password(&self, prompt: Option<&str>) -> Result<String, ReadlineError> {
+        readline::Readline::prompt_password(prompt.unwrap_or(self.config.password_prompt))
     }
 
-    /// Prompts the user for a password twice.
-    ///
-    /// Does not verify if the passwords match.
+    /// Parses a string directly into a [`clap::ArgMatches`] object.
     ///
     /// # Errors
-    /// May return a [`ReadlineError`] from the internal readline implementation.
-    pub fn prompt_new_password(&mut self) -> Result<(String, String), readline::Error> {
-        // Does IO.
-        Ok((
-            Readline::prompt_password(self.config.new_password_prompt)?,
-            Readline::prompt_password(self.config.new_password_retype_prompt)?,
-        ))
+    /// - `MismatchedQuote` parsing failed due to mismatched quotation marks within the input.
+    ///
+    /// # Examples
+    /// ```
+    /// use clap::{App, Arg};
+    /// use slaps::Slaps;
+    ///
+    /// let command = App::new("slaps").arg(Arg::with_name("that").long("that").takes_value(true));
+    /// let mut slaps = Slaps::with_name("slaps").subcommand(command);
+    /// let matches = slaps.get_matches("slaps --that arg").unwrap();
+    ///
+    /// assert_eq!(matches.subcommand_name(), Some("slaps"));
+    /// assert_eq!(matches.subcommand_matches("slaps").unwrap().value_of("that"), Some("arg"));
+    /// ```
+    pub fn get_matches<T: AsRef<str>>(&mut self, input: T) -> Result<clap::ArgMatches, Error> {
+        let words = shlex::split(input.as_ref())?;
+        Ok(self.matcher.get_matches(&words)?)
     }
-}
 
-impl Default for Slaps<'_> {
-    fn default() -> Self {
-        Slaps::new()
-    }
-}
+    /// Starts the main interactive loop, prompting the user for input repeatedly.
+    ///
+    /// # Errors
+    /// Will return an error when it fails to read more input.
+    pub fn run(mut self) -> Result<(), Error> {
+        loop {
+            let input = match readline::Readline::with_completer(self.config, &self.matcher)
+                .prompt_line(self.config.prompt)
+            {
+                Ok(i) => i,
+                Err(e) => return Err(Error::ReadlineError(e)),
+            };
 
-#[cfg(test)]
-mod tests {
-    use crate::Slaps;
-
-    #[test]
-    fn test_default_same_config_as_new() {
-        let slaps_new = Slaps::new();
-        let slaps_default = Slaps::default();
-
-        assert_eq!(slaps_new.config, slaps_default.config);
+            match self.get_matches(&input) {
+                Err(Error::ClapError(e)) => match e.kind {
+                    clap::ErrorKind::Io | ErrorKind::Format => return Err(Error::ClapError(e)),
+                    _ => eprintln!("{}", e),
+                },
+                Ok(r) => eprintln!("t {:?}", r),
+                Err(e) => eprintln!("{}", e),
+            };
+        }
     }
 }

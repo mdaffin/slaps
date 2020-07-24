@@ -5,36 +5,44 @@
  */
 
 use crate::{ColorMode, CompletionType, Config};
+use rustyline::completion::{Candidate, Completer};
 use rustyline::error::ReadlineError;
-use rustyline::Editor;
+use rustyline::highlight::Highlighter;
+use rustyline::hint::Hinter;
+use rustyline::line_buffer::LineBuffer;
+use rustyline::validate::Validator;
+use rustyline::{Context, Editor};
 use std::fmt::{Display, Formatter};
 use std::io;
 
 /// Rustyline-based readline implementation.
 #[derive(Debug)]
-pub(crate) struct Readline {
-    editor: Editor<()>,
+pub struct Readline<'a> {
+    editor: Editor<Helper<'a>>,
 }
 
-impl Readline {
-    pub fn with_config(config: &Config) -> Self {
+impl<'a> Readline<'a> {
+    pub fn new(config: Config) -> Self {
         Readline {
-            editor: Editor::with_config(config.into()),
+            editor: Editor::with_config((&config).into()),
         }
+    }
+
+    pub fn with_completer(
+        config: Config,
+        completer: &'a (dyn Completer<Candidate = CompletionCandidate> + 'a),
+    ) -> Self {
+        let mut readline = Self::new(config);
+        readline.editor.set_helper(Some(Helper { completer }));
+        readline
     }
 
     pub fn prompt_line(&mut self, prompt: &str) -> Result<String, Error> {
-        match self.editor.readline(prompt) {
-            Ok(s) => Ok(s),
-            Err(e) => Err(e.into()),
-        }
+        Ok(self.editor.readline(prompt)?)
     }
 
     pub fn prompt_password(prompt: &str) -> Result<String, Error> {
-        match rpassword::prompt_password_stderr(prompt) {
-            Ok(s) => Ok(s),
-            Err(e) => Err(e.into()),
-        }
+        Ok(rpassword::prompt_password_stderr(prompt)?)
     }
 }
 
@@ -143,6 +151,59 @@ impl Into<rustyline::CompletionType> for CompletionType {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct Helper<'a> {
+    completer: &'a dyn Completer<Candidate = CompletionCandidate>,
+}
+
+impl Completer for Helper<'_> {
+    type Candidate = CompletionCandidate;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        ctx: &Context<'_>,
+    ) -> Result<(usize, Vec<Self::Candidate>), rustyline::error::ReadlineError> {
+        self.completer.complete(line, pos, ctx)
+    }
+
+    fn update(&self, line: &mut LineBuffer, start: usize, elected: &str) {
+        self.completer.update(line, start, elected)
+    }
+}
+
+impl Hinter for Helper<'_> {}
+
+impl Validator for Helper<'_> {}
+
+impl Highlighter for Helper<'_> {}
+
+impl rustyline::Helper for Helper<'_> {}
+
+#[derive(Debug, Clone)]
+pub struct CompletionCandidate {
+    pub replacement: String,
+    pub kind: CandidateType,
+}
+
+impl Candidate for CompletionCandidate {
+    fn display(&self) -> &str {
+        &self.replacement
+    }
+
+    fn replacement(&self) -> &str {
+        &self.replacement
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum CandidateType {
+    Value,
+    Command,
+    Argument,
+}
+
 #[cfg(test)]
 mod test {
     use crate::config::ColorMode::Disabled;
@@ -160,7 +221,7 @@ mod test {
 
         let config = Config::default().color_mode(Disabled).completion_type(List);
 
-        let mut readline = Readline::with_config(&config);
+        let mut readline = Readline::new(config);
         let readline_config = readline.editor.config_mut();
         assert_eq!(readline_config.color_mode(), ColorMode::Disabled);
         assert_eq!(readline_config.completion_type(), CompletionType::List);

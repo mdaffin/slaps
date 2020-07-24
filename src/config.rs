@@ -4,7 +4,7 @@
  * License: WTFPL
  */
 
-/// Used to configure and provide abstraction for the internal sub-components of slaps.
+/// Configuration for the internal sub-components of slaps.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub struct Config<'a> {
     /// Colorization mode.
@@ -15,10 +15,12 @@ pub struct Config<'a> {
     pub prompt: &'a str,
     /// Prompt for passwords.
     pub password_prompt: &'a str,
-    /// Prompt for new passwords.
-    pub new_password_prompt: &'a str,
-    /// Prompt for retyping new passwords.
-    pub new_password_retype_prompt: &'a str,
+    /// Template for the root help command.
+    pub help_template: &'a str,
+    /// Help template for subcommands with arguments.
+    pub subcommand_help_template: &'a str,
+    /// Help template for subcommands without arguments.
+    pub subcommand_help_template_no_args: &'a str,
 }
 
 impl<'a> Config<'a> {
@@ -84,33 +86,54 @@ impl<'a> Config<'a> {
         self
     }
 
-    /// Sets the string used to prompt for new passwords.
+    /// Sets the [template] for the root help command.
     ///
     /// # Examples
     /// ```
     /// use slaps::Config;
     ///
-    /// let config = Config::default().new_password_prompt("New password? ");
-    /// # assert_eq!(config.new_password_prompt, "New password? ");
+    /// let config = Config::default().help_template("Subcommands: {subcommands}");
+    /// # assert_eq!(config.help_template, "Subcommands: {subcommands}");
     /// ```
+    ///
+    /// [template]: clap::App::template
     #[must_use]
-    pub fn new_password_prompt(mut self, prompt: &'a str) -> Self {
-        self.new_password_prompt = prompt;
+    pub fn help_template(mut self, template: &'a str) -> Self {
+        self.help_template = template;
         self
     }
 
-    /// Sets the string used to prompt to retype new passwords.
+    /// Sets the help [template] for subcommands with arguments.
     ///
     /// # Examples
     /// ```
     /// use slaps::Config;
     ///
-    /// let config = Config::default().new_password_retype_prompt("Retype password? ");
-    /// # assert_eq!(config.new_password_retype_prompt, "Retype password? ");
+    /// let config = Config::default().subcommand_help_template("Usage: {usage}");
+    /// # assert_eq!(config.subcommand_help_template, "Usage: {usage}");
     /// ```
+    ///
+    /// [template]: clap::App::template
     #[must_use]
-    pub fn new_password_retype_prompt(mut self, prompt: &'a str) -> Self {
-        self.new_password_retype_prompt = prompt;
+    pub fn subcommand_help_template(mut self, template: &'a str) -> Self {
+        self.subcommand_help_template = template;
+        self
+    }
+
+    /// Sets the help [template] for subcommands without arguments.
+    ///
+    /// # Examples
+    /// ```
+    /// use slaps::Config;
+    ///
+    /// let config = Config::default().subcommand_help_template_no_args("About: {about}");
+    /// # assert_eq!(config.subcommand_help_template_no_args, "About: {about}");
+    /// ```
+    ///
+    /// [template]: clap::App::template
+    #[must_use]
+    pub fn subcommand_help_template_no_args(mut self, template: &'a str) -> Self {
+        self.subcommand_help_template_no_args = template;
         self
     }
 }
@@ -122,8 +145,9 @@ impl Default for Config<'_> {
             completion_type: CompletionType::default(),
             prompt: "> ",
             password_prompt: "Password: ",
-            new_password_prompt: "Enter new password: ",
-            new_password_retype_prompt: "Retype new password: ",
+            help_template: "{subcommands}",
+            subcommand_help_template: "{usage}\n{about}\n\n{all-args}",
+            subcommand_help_template_no_args: "{about}",
         }
     }
 }
@@ -145,10 +169,10 @@ impl Default for ColorMode {
     }
 }
 
-/// Tab completion style
+/// Tab completion style.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum CompletionType {
-    /// Complete the next full match (like in Vim by default)
+    /// Complete the next full match (like in Vim by default).
     Circular,
     /// Complete till longest match.
     /// When more than one match, list all matches
@@ -175,8 +199,9 @@ mod tests {
                 completion_type: CompletionType::Circular,
                 prompt: "> ",
                 password_prompt: "Password: ",
-                new_password_prompt: "Enter new password: ",
-                new_password_retype_prompt: "Retype new password: ",
+                help_template: "{subcommands}",
+                subcommand_help_template: "{usage}\n{about}\n\n{all-args}",
+                subcommand_help_template_no_args: "{about}"
             }
         );
     }

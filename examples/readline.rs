@@ -7,22 +7,13 @@
 use slaps::Slaps;
 
 fn main() {
-    let mut slaps = Slaps::new();
+    let slaps = Slaps::with_name("slaps");
 
     eprintln!("{:?}", slaps);
 
-    let line = slaps.prompt_line().unwrap();
+    let line = slaps.prompt_line(None).unwrap();
     println!("Hello, {}", line);
 
-    let password = slaps.prompt_password().unwrap();
+    let password = slaps.prompt_password(None).unwrap();
     println!("Password was {} characters long!", password.len());
-
-    let (new_password, new_password_confirm) = slaps.prompt_new_password().unwrap();
-    if new_password.is_empty() && new_password_confirm.is_empty() {
-        println!("You did not enter a password!")
-    } else if new_password == new_password_confirm {
-        println!("Passwords match!");
-    } else {
-        println!("Passwords do not match!")
-    }
 }

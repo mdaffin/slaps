@@ -3,11 +3,13 @@
  * Copyright (C) 2020 rd <slaps@megane.space>
  * License: WTFPL
  */
+use crate::shlex::FieldType::ArgDoubleDash;
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::borrow::Cow;
 use std::borrow::Cow::Borrowed;
 use std::error::Error;
+use std::ffi::OsStr;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::ops::Range;
@@ -67,13 +69,13 @@ impl<'a> Field<'a> {
     /// assert!(fields[0].is_argument());
     /// assert!(fields[1].is_argument());
     /// assert!(!fields[2].is_argument());
-    /// assert!(!fields[3].is_argument());
+    /// assert!(fields[3].is_argument());
     /// assert!(!fields[4].is_argument()); // after a "--", all arguments are treated as values
     /// ```
     #[allow(clippy::must_use_candidate)]
     pub fn is_argument(&self) -> bool {
         use FieldType::{ArgLong, ArgShort};
-        self.kind == ArgShort || self.kind == ArgLong
+        self.kind == ArgShort || self.kind == ArgLong || self.kind == ArgDoubleDash
     }
 
     /// If the field is an argument, returns a tuple of its name and optional value.
@@ -98,7 +100,7 @@ impl<'a> Field<'a> {
         if self.is_argument() {
             let name_offset = match self.kind {
                 ArgShort => 1,
-                ArgLong => 2,
+                ArgLong | ArgDoubleDash => 2,
                 _ => unreachable!(),
             };
 
@@ -110,6 +112,17 @@ impl<'a> Field<'a> {
             return (Some(&self.parsed[name_offset..]), None);
         }
         (None, None)
+    }
+
+    #[must_use]
+    pub fn is_quoted(&self) -> bool {
+        self.original.starts_with('\'') || self.original.starts_with('"')
+    }
+}
+
+impl AsRef<OsStr> for Field<'_> {
+    fn as_ref(&self) -> &OsStr {
+        (*self.parsed).as_ref()
     }
 }
 
@@ -144,23 +157,45 @@ impl<T: AsRef<str>> From<T> for FieldType {
     }
 }
 
+pub trait FieldMatcher {
+    fn split_at_pos(&self, pos: usize) -> (&[Field<'_>], Option<&Field>, &[Field<'_>]);
+    fn has_double_dash(&self) -> bool;
+    fn match_first(&self, s: &str) -> Option<&Field>;
+}
+
+impl FieldMatcher for [Field<'_>] {
+    fn split_at_pos(&self, pos: usize) -> (&[Field<'_>], Option<&Field<'_>>, &[Field<'_>]) {
+        if let Some(at_cursor) = self
+            .iter()
+            .position(|w| w.position.start < pos && w.position.end >= pos)
+        {
+            (
+                &self[..at_cursor],
+                self.get(at_cursor),
+                &self[at_cursor + 1..],
+            )
+        } else if let Some(split_pos) = self.iter().position(|w| w.position.start >= pos) {
+            let (before, after) = self.split_at(split_pos);
+            (before, None, after)
+        } else {
+            (self, None, &[])
+        }
+    }
+
+    fn has_double_dash(&self) -> bool {
+        self.iter().any(|f| f.kind == FieldType::ArgDoubleDash)
+    }
+
+    fn match_first(&self, s: &str) -> Option<&Field> {
+        self.iter().take(1).find(|&f| f.parsed == s)
+    }
+}
+
 /// Error returned by [`split`] when the input has mismatched quote characters.
 ///
 /// Contains the position of the first mismatched quote within the original input.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct MismatchedQuotes(usize);
-
-impl AsRef<usize> for MismatchedQuotes {
-    fn as_ref(&self) -> &usize {
-        &self.0
-    }
-}
-
-impl AsMut<usize> for MismatchedQuotes {
-    fn as_mut(&mut self) -> &mut usize {
-        &mut self.0
-    }
-}
+pub struct MismatchedQuotes(pub usize);
 
 impl Display for MismatchedQuotes {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -187,16 +222,18 @@ impl From<usize> for MismatchedQuotes {
 /// # Examples
 /// ```
 /// # use slaps::shlex::split;
+/// use slaps::MismatchedQuotes;
 /// let fields = split(r#"foo "bar\" abc" 'bcd aaa'"#).unwrap();
 /// let mismatched_quotes = r#"foo 'bar"#;
-/// let mismatched_position = split(mismatched_quotes).unwrap_err();
+/// let mismatched_position = split(mismatched_quotes);
 ///
 /// assert_eq!(fields.len(), 3);
 /// assert_eq!(fields[0].parsed, "foo");
 /// assert_eq!(fields[1].parsed, "bar\" abc");
 /// assert_eq!(fields[2].parsed, "bcd aaa");
-/// assert_eq!(*mismatched_position.as_ref(), 4);
-/// assert_eq!(split(&mismatched_quotes[0..4]).unwrap().len(), 1); // this is guaranteed to work.
+/// assert_eq!(mismatched_position, Err(MismatchedQuotes(4)));
+/// // this is guaranteed to work.
+/// assert_eq!(split(&mismatched_quotes[0..mismatched_position.unwrap_err().0]).unwrap().len(), 1);
 /// ```
 pub fn split(input: &str) -> Result<Vec<Field>, MismatchedQuotes> {
     let mut fields = Vec::with_capacity(input.split_whitespace().count());
@@ -243,7 +280,7 @@ pub fn split(input: &str) -> Result<Vec<Field>, MismatchedQuotes> {
             } else {
                 let range = double_quoted_word.start() - 1..=double_quoted_word.end();
                 let start = *range.start();
-                new_field = Some(Field::new(&input[range.clone()], start, escaped));
+                new_field = Some(Field::new(&input[range], start, escaped));
             }
         } else if let Some(to_escape) = capture.get(4) {
             let escaped = ESCAPE_PATTERN.replace_all(to_escape.as_str(), "$1");
@@ -438,13 +475,9 @@ mod tests {
         assert_eq!(split(r#"foo'   '  " aaaa"#).unwrap_err().0, 10);
         assert_eq!(split(r#"foo"   "  '     "#).unwrap_err().0, 10);
 
-        let mut mismatched = MismatchedQuotes(10);
+        let mismatched = MismatchedQuotes(10);
         assert_eq!(format!("{}", mismatched), format!("{}", 10 as usize));
 
-        assert_eq!(mismatched.0, 10);
-        *mismatched.as_mut() += 10;
-        assert_eq!(mismatched.0, 20);
-        assert_eq!(*mismatched.as_ref(), 20);
         assert_eq!(MismatchedQuotes(20), MismatchedQuotes(20));
         assert_ne!(MismatchedQuotes(20), MismatchedQuotes(10));
         assert!(MismatchedQuotes(20) > MismatchedQuotes(10));
