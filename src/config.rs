@@ -4,8 +4,10 @@
  * License: WTFPL
  */
 
+use ansi_term::{Color, Style};
+
 /// Configuration for the internal sub-components of slaps.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Config<'a> {
     /// Colorization mode.
     pub color_mode: ColorMode,
@@ -21,6 +23,16 @@ pub struct Config<'a> {
     pub subcommand_help_template: &'a str,
     /// Help template for subcommands without arguments.
     pub subcommand_help_template_no_args: &'a str,
+    /// Style to use to highlight commands.
+    pub highlighter_style_command: Style,
+    /// Style to use to highlight arguments.
+    pub highlighter_style_argument: Style,
+    /// Style to use to highlight values.
+    pub highlighter_style_value: Style,
+    /// Style to use to highlight mismatched quotes.
+    pub highlighter_style_mismatched_quotes: Style,
+    /// Whether to underline the word currently under cursor while editing.
+    pub highlighter_underline_word_under_cursor: bool,
 }
 
 impl<'a> Config<'a> {
@@ -136,6 +148,86 @@ impl<'a> Config<'a> {
         self.subcommand_help_template_no_args = template;
         self
     }
+
+    /// Sets the [`Style`] used to highlight commands and subcommands.
+    ///
+    /// # Examples
+    /// ```
+    /// use slaps::Config;
+    /// use ansi_term::Color;
+    ///
+    /// let config = Config::default().highlighter_command_style(Color::Blue.normal());
+    /// # assert_eq!(config.highlighter_style_command, Color::Blue.normal());
+    /// ```
+    #[must_use]
+    pub fn highlighter_command_style(mut self, style: Style) -> Self {
+        self.highlighter_style_command = style;
+        self
+    }
+
+    /// Sets the [`Style`] used to highlight arguments.
+    ///
+    /// # Examples
+    /// ```
+    /// use slaps::Config;
+    /// use ansi_term::Color;
+    ///
+    /// let config = Config::default().highlighter_argument_style(Color::Blue.normal());
+    /// # assert_eq!(config.highlighter_style_argument, Color::Blue.normal());
+    /// ```
+    #[must_use]
+    pub fn highlighter_argument_style(mut self, style: Style) -> Self {
+        self.highlighter_style_argument = style;
+        self
+    }
+
+    /// Sets the [`Style`] used to highlight values for positional and named arguments.
+    ///
+    /// # Examples
+    /// ```
+    /// use slaps::Config;
+    /// use ansi_term::Color;
+    ///
+    /// let config = Config::default().highlighter_value_style(Color::Blue.normal());
+    /// # assert_eq!(config.highlighter_style_value, Color::Blue.normal());
+    /// ```
+    #[must_use]
+    pub fn highlighter_value_style(mut self, style: Style) -> Self {
+        self.highlighter_style_value = style;
+        self
+    }
+
+    /// Sets the [`Style`] used to highlight unclosed quotation marks.
+    ///
+    /// # Examples
+    /// ```
+    /// use slaps::Config;
+    /// use ansi_term::Color;
+    ///
+    /// let config = Config::default().highlighter_mismatched_quote_style(Color::Blue.normal());
+    /// # assert_eq!(config.highlighter_style_mismatched_quotes, Color::Blue.normal());
+    /// ```
+    #[must_use]
+    pub fn highlighter_mismatched_quote_style(mut self, style: Style) -> Self {
+        self.highlighter_style_mismatched_quotes = style;
+        self
+    }
+
+    /// Enables or disables underlining the word currently under cursor by the input highlighter.
+    ///
+    /// # Examples
+    /// ```
+    /// use slaps::Config;
+    /// use ansi_term::Color;
+    ///
+    /// let config = Config::default().highlighter_underline_word_under_cursor(false);
+    /// # assert_eq!(config.highlighter_underline_word_under_cursor, false);
+    /// ```
+    #[must_use]
+    pub fn highlighter_underline_word_under_cursor(mut self, underline: bool) -> Self {
+        self.highlighter_underline_word_under_cursor = underline;
+        self
+    }
 }
 
 impl Default for Config<'_> {
@@ -148,6 +240,11 @@ impl Default for Config<'_> {
             help_template: "{subcommands}",
             subcommand_help_template: "{usage}\n{about}\n\n{all-args}",
             subcommand_help_template_no_args: "{about}",
+            highlighter_style_command: Color::Yellow.bold(),
+            highlighter_style_argument: Color::Purple.bold(),
+            highlighter_style_mismatched_quotes: Color::Red.normal(),
+            highlighter_style_value: Color::Green.normal(),
+            highlighter_underline_word_under_cursor: true,
         }
     }
 }
@@ -189,6 +286,7 @@ impl Default for CompletionType {
 #[cfg(test)]
 mod tests {
     use crate::{ColorMode, CompletionType, Config};
+    use ansi_term::Color;
 
     #[test]
     fn test_default_config() {
@@ -201,7 +299,12 @@ mod tests {
                 password_prompt: "Password: ",
                 help_template: "{subcommands}",
                 subcommand_help_template: "{usage}\n{about}\n\n{all-args}",
-                subcommand_help_template_no_args: "{about}"
+                subcommand_help_template_no_args: "{about}",
+                highlighter_style_command: Color::Yellow.bold(),
+                highlighter_style_argument: Color::Purple.bold(),
+                highlighter_style_mismatched_quotes: Color::Red.normal(),
+                highlighter_style_value: Color::Green.normal(),
+                highlighter_underline_word_under_cursor: true,
             }
         );
     }

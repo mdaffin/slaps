@@ -12,6 +12,8 @@ use rustyline::hint::Hinter;
 use rustyline::line_buffer::LineBuffer;
 use rustyline::validate::Validator;
 use rustyline::{Context, Editor};
+use std::borrow::Cow;
+use std::borrow::Cow::Borrowed;
 use std::fmt::{Display, Formatter};
 use std::io;
 
@@ -32,11 +34,14 @@ impl<'a> Readline<'a> {
         config: Config,
         completer: &'a (dyn Completer<Candidate = CompletionCandidate> + 'a),
         hinter: &'a dyn Hinter,
+        highlighter: &'a dyn Highlighter,
     ) -> Self {
         let mut readline = Self::new(config);
-        readline
-            .editor
-            .set_helper(Some(Helper { completer, hinter }));
+        readline.editor.set_helper(Some(Helper {
+            completer,
+            hinter,
+            highlighter,
+        }));
         readline
     }
 
@@ -158,6 +163,7 @@ impl Into<rustyline::CompletionType> for CompletionType {
 pub struct Helper<'a> {
     completer: &'a dyn Completer<Candidate = CompletionCandidate>,
     hinter: &'a dyn Hinter,
+    highlighter: &'a dyn Highlighter,
 }
 
 impl Completer for Helper<'_> {
@@ -185,7 +191,24 @@ impl Hinter for Helper<'_> {
 
 impl Validator for Helper<'_> {}
 
-impl Highlighter for Helper<'_> {}
+impl Highlighter for Helper<'_> {
+    fn highlight<'l>(&self, line: &'l str, pos: usize) -> Cow<'l, str> {
+        self.highlighter.highlight(line, pos)
+    }
+    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
+        &'s self,
+        prompt: &'p str,
+        _default: bool,
+    ) -> Cow<'b, str> {
+        Borrowed(prompt)
+    }
+    fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
+        Cow::from(format!("{}", ansi_term::Color::White.dimmed().paint(hint)))
+    }
+    fn highlight_char(&self, _line: &str, _pos: usize) -> bool {
+        true
+    }
+}
 
 impl rustyline::Helper for Helper<'_> {}
 

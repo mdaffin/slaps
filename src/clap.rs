@@ -11,10 +11,14 @@ use clap::ArgSettings;
 pub use clap::{App, AppSettings, ArgMatches, ErrorKind};
 use itertools::Itertools;
 use rustyline::completion::Completer;
+use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
 use rustyline::Context;
+use std::borrow::Cow;
+use std::borrow::Cow::Borrowed;
 use std::cmp::Ordering;
 use std::ffi::OsStr;
+use std::fmt::Write;
 use std::fmt::{Debug, Display, Formatter};
 
 // Clap settings suited for interactive usage. Set for all subcommands.
@@ -328,6 +332,109 @@ impl Hinter for Matcher<'_, '_> {
     }
 }
 
+impl Highlighter for Matcher<'_, '_> {
+    fn highlight<'l>(&self, line: &'l str, pos: usize) -> Cow<'l, str> {
+        let (line, fields) = match split(&line) {
+            Ok(f) => (Borrowed(line), f),
+            Err(MismatchedQuotes(quote_pos)) => (
+                {
+                    let quote_char = line.chars().nth(quote_pos).unwrap().to_string();
+                    let (quote_style, value_style) =
+                        if self.config.highlighter_underline_word_under_cursor && pos > quote_pos {
+                            (
+                                self.config.highlighter_style_mismatched_quotes.underline(),
+                                self.config.highlighter_style_value.underline(),
+                            )
+                        } else {
+                            (
+                                self.config.highlighter_style_mismatched_quotes,
+                                self.config.highlighter_style_value,
+                            )
+                        };
+                    Cow::from(format!(
+                        "{}{}{}",
+                        &line[..quote_pos],
+                        &quote_style.paint(&quote_char),
+                        &value_style.paint(&line[quote_pos + 1..])
+                    ))
+                },
+                split(&line[..quote_pos]).unwrap(),
+            ),
+        };
+
+        let (_, subcommand_word, _) = self.command_from_input(&fields);
+        let (_, at_cursor, _) = fields.split_at_pos(pos);
+        let mut highlighted = String::new();
+        let mut highlighted_pos = 0;
+
+        for field in &fields {
+            // Insert whitespace.
+            while highlighted_pos < field.position.start {
+                highlighted.push(' ');
+                highlighted_pos += 1;
+            }
+            let mut color = None;
+
+            // Highlight commands.
+            if let Some(subcommand_word) = subcommand_word {
+                if subcommand_word.position.start >= field.position.start {
+                    color = Some(self.config.highlighter_style_command);
+                }
+            }
+            // Highlight arguments.
+            if color.is_none() && field.is_argument() {
+                if let Some(equals_pos) = field.original.find('=') {
+                    let (before_equals, after_equals) = field.original.split_at(equals_pos);
+                    let (arg_style, value_style) =
+                        if self.config.highlighter_underline_word_under_cursor
+                            && Some(field) == at_cursor
+                        {
+                            (
+                                self.config.highlighter_style_argument.underline(),
+                                self.config.highlighter_style_value.underline(),
+                            )
+                        } else {
+                            (
+                                self.config.highlighter_style_argument,
+                                self.config.highlighter_style_value,
+                            )
+                        };
+                    write!(
+                        highlighted,
+                        "{}{}",
+                        arg_style.paint(before_equals),
+                        value_style.paint(after_equals)
+                    )
+                    .unwrap();
+                    highlighted_pos += field.original.len();
+                    continue;
+                } else {
+                    color = Some(self.config.highlighter_style_argument);
+                }
+            }
+            // Highlight values
+            if color.is_none() {
+                color = Some(self.config.highlighter_style_value);
+            }
+
+            // Underline word at cursor.
+            if self.config.highlighter_underline_word_under_cursor && Some(field) == at_cursor {
+                color = Some(color.unwrap().underline());
+            }
+            write!(highlighted, "{}", color.unwrap().paint(field.original)).unwrap();
+            highlighted_pos += field.original.len();
+        }
+
+        if highlighted.is_empty() {
+            line
+        } else {
+            // Add remaining un-highlighted substring.
+            highlighted.push_str(&line[highlighted_pos..]);
+            Cow::from(highlighted)
+        }
+    }
+}
+
 fn get_subcommands_names(app: &clap::App) -> impl Iterator<Item = CompletionCandidate> {
     app.p
         .subcommands
@@ -577,6 +684,7 @@ mod tests {
     use crate::Config;
     use clap::{App, AppSettings, Arg, ErrorKind, SubCommand};
     use rustyline::completion::Completer;
+    use rustyline::highlight::Highlighter;
     use rustyline::hint::Hinter;
     use rustyline::history::History;
     use rustyline::Context;
@@ -1962,5 +2070,250 @@ mod tests {
         let result = slaps.hint("slaps ", 6, &Context::new(&History::new()));
 
         assert_eq!(result.as_deref(), Some("--this"));
+    }
+
+    #[test]
+    fn test_clap_highlighter_reconstructs_whitespace() {
+        let app = clap::App::new("slaps").arg(
+            Arg::with_name("this")
+                .long("this")
+                .takes_value(true)
+                .required(true),
+        );
+        let config = Config::default();
+        let mut slaps = Matcher::with_name_and_config("slaps", Config::default());
+        slaps.register_command(app);
+
+        let result = slaps.highlight("slaps   --this", 6);
+
+        assert_eq!(
+            result,
+            format!(
+                "{}   {}",
+                &config.highlighter_style_command.paint("slaps"),
+                &config.highlighter_style_argument.paint("--this")
+            )
+        );
+    }
+
+    #[test]
+    fn test_clap_highlighter_highlights_mismatched_quote() {
+        let app = clap::App::new("slaps").arg(
+            Arg::with_name("this")
+                .long("this")
+                .takes_value(true)
+                .required(true),
+        );
+        let config = Config::default().highlighter_underline_word_under_cursor(false);
+        let mut slaps = Matcher::with_name_and_config("slaps", config);
+        slaps.register_command(app);
+
+        let result = slaps.highlight(" \"--this", 0);
+
+        assert_eq!(
+            result,
+            format!(
+                " {}{}",
+                &config.highlighter_style_mismatched_quotes.paint("\""),
+                &config.highlighter_style_value.paint("--this")
+            )
+        );
+    }
+
+    #[test]
+    fn test_clap_highlighter_highlights_mismatched_quote_underline() {
+        let app = clap::App::new("slaps").arg(
+            Arg::with_name("this")
+                .long("this")
+                .takes_value(true)
+                .required(true),
+        );
+        let config = Config::default().highlighter_underline_word_under_cursor(true);
+        let mut slaps = Matcher::with_name_and_config("slaps", config);
+        slaps.register_command(app);
+
+        let result = slaps.highlight("\"--this", 7);
+
+        assert_eq!(
+            result,
+            format!(
+                "{}{}",
+                &config
+                    .highlighter_style_mismatched_quotes
+                    .underline()
+                    .paint("\""),
+                &config.highlighter_style_value.underline().paint("--this")
+            )
+        );
+    }
+
+    #[test]
+    fn test_clap_highlighter_highlights_before_mismatched_quote() {
+        let app = clap::App::new("slaps").arg(
+            Arg::with_name("this")
+                .long("this")
+                .takes_value(true)
+                .required(true),
+        );
+        let config = Config::default().highlighter_underline_word_under_cursor(false);
+        let mut slaps = Matcher::with_name_and_config("slaps", config);
+        slaps.register_command(app);
+
+        let result = slaps.highlight("slaps \"--this", 6);
+
+        assert_eq!(
+            result,
+            format!(
+                "{} {}{}",
+                &config.highlighter_style_command.paint("slaps"),
+                &config.highlighter_style_mismatched_quotes.paint("\""),
+                &config.highlighter_style_value.paint("--this")
+            )
+        );
+    }
+
+    #[test]
+    fn test_clap_highlighter_highlights_all_values_after_double_dash() {
+        let app = clap::App::new("slaps").arg(
+            Arg::with_name("this")
+                .long("this")
+                .takes_value(true)
+                .required(true),
+        );
+        let config = Config::default().highlighter_underline_word_under_cursor(false);
+        let mut slaps = Matcher::with_name_and_config("slaps", config);
+        slaps.register_command(app);
+
+        let result = slaps.highlight("slaps -- --this", 6);
+
+        assert_eq!(
+            result,
+            format!(
+                "{} {} {}",
+                &config.highlighter_style_command.paint("slaps"),
+                &config.highlighter_style_argument.paint("--"),
+                &config.highlighter_style_value.paint("--this")
+            )
+        );
+    }
+
+    #[test]
+    fn test_clap_highlighter_highlights_command() {
+        let app = clap::App::new("slaps").arg(
+            Arg::with_name("this")
+                .long("this")
+                .takes_value(true)
+                .required(true),
+        );
+        let config = Config::default().highlighter_underline_word_under_cursor(false);
+        let mut slaps = Matcher::with_name_and_config("slaps", config);
+        slaps.register_command(app);
+
+        let result = slaps.highlight("slaps", 5);
+
+        assert_eq!(
+            result,
+            format!("{}", &config.highlighter_style_command.paint("slaps"),)
+        );
+    }
+
+    #[test]
+    fn test_clap_highlighter_highlights_argument() {
+        let app = clap::App::new("slaps").arg(
+            Arg::with_name("this")
+                .long("this")
+                .takes_value(true)
+                .required(true),
+        );
+        let config = Config::default().highlighter_underline_word_under_cursor(false);
+        let mut slaps = Matcher::with_name_and_config("slaps", config);
+        slaps.register_command(app);
+
+        let result = slaps.highlight("slaps --this", 0);
+
+        assert_eq!(
+            result,
+            format!(
+                "{} {}",
+                &config.highlighter_style_command.paint("slaps"),
+                &config.highlighter_style_argument.paint("--this"),
+            )
+        );
+    }
+
+    #[test]
+    fn test_clap_highlighter_highlights_argument_with_inline_value() {
+        let app = clap::App::new("slaps").arg(
+            Arg::with_name("this")
+                .long("this")
+                .takes_value(true)
+                .required(true),
+        );
+        let config = Config::default().highlighter_underline_word_under_cursor(false);
+        let mut slaps = Matcher::with_name_and_config("slaps", config);
+        slaps.register_command(app);
+
+        let result = slaps.highlight("slaps --this=arg", 16);
+
+        assert_eq!(
+            result,
+            format!(
+                "{} {}{}",
+                &config.highlighter_style_command.paint("slaps"),
+                &config.highlighter_style_argument.paint("--this"),
+                &config.highlighter_style_value.paint("=arg"),
+            )
+        );
+    }
+
+    #[test]
+    fn test_clap_highlighter_underlines_argument_with_inline_value() {
+        let app = clap::App::new("slaps").arg(
+            Arg::with_name("this")
+                .long("this")
+                .takes_value(true)
+                .required(true),
+        );
+        let config = Config::default().highlighter_underline_word_under_cursor(true);
+        let mut slaps = Matcher::with_name_and_config("slaps", config);
+        slaps.register_command(app);
+
+        let result = slaps.highlight("slaps --this=arg", 16);
+
+        assert_eq!(
+            result,
+            format!(
+                "{} {}{}",
+                &config.highlighter_style_command.paint("slaps"),
+                &config
+                    .highlighter_style_argument
+                    .underline()
+                    .paint("--this"),
+                &config.highlighter_style_value.underline().paint("=arg"),
+            )
+        );
+    }
+
+    #[test]
+    fn test_clap_highlighter_does_not_underline_word_under_cursor_if_disabled() {
+        let app = clap::App::new("slaps").arg(
+            Arg::with_name("this")
+                .long("this")
+                .takes_value(true)
+                .required(true),
+        );
+        let config = Config::default().highlighter_underline_word_under_cursor(true);
+        let mut slaps = Matcher::with_name_and_config("slaps", config);
+        slaps.register_command(app);
+
+        let result = slaps.highlight("slaps", 5);
+
+        assert_eq!(
+            result,
+            format!(
+                "{}",
+                &config.highlighter_style_command.underline().paint("slaps"),
+            )
+        );
     }
 }
