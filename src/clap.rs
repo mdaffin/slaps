@@ -19,6 +19,8 @@ use std::fmt::{Debug, Display, Formatter};
 
 // Clap settings suited for interactive usage. Set for all subcommands.
 const GLOBAL_CLAP_SETTINGS: &[AppSettings] = &[
+    #[cfg(test)]
+    AppSettings::ColorNever,
     AppSettings::DisableVersion,
     AppSettings::DisableHelpFlags,
     AppSettings::InferSubcommands,
