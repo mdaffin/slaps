@@ -4,14 +4,14 @@
  * License: WTFPL
  */
 
-use crate::readline::CandidateType::Command;
 use crate::readline::{CandidateType, CompletionCandidate};
 use crate::shlex::{split, Field, FieldMatcher, FieldType};
-use crate::Config;
+use crate::{Config, MismatchedQuotes};
 use clap::ArgSettings;
 pub use clap::{App, AppSettings, ArgMatches, ErrorKind};
 use itertools::Itertools;
 use rustyline::completion::Completer;
+use rustyline::hint::Hinter;
 use rustyline::Context;
 use std::cmp::Ordering;
 use std::ffi::OsStr;
@@ -144,6 +144,124 @@ impl<'a, 'b> Matcher<'a, 'b> {
                 .for_each(|c| self.apply_global_settings(c))
         }
     }
+
+    fn complete_fields(&self, line: &[Field], pos: usize) -> (usize, Vec<CompletionCandidate>) {
+        // Split off fields before, at and after cursor.
+        let (before_cursor, at_cursor, _) = line.split_at_pos(pos);
+
+        // If cursor past a double dash, short circuit.
+        if before_cursor.has_double_dash() {
+            return (1, Vec::with_capacity(0));
+        }
+
+        // If cursor inside a quoted string, short circuit
+        if at_cursor.iter().any(|&f| f.is_quoted()) {
+            return (2, Vec::with_capacity(0));
+        }
+
+        // Enable special handling for the help command.
+        let help_field = before_cursor.match_first("help");
+
+        // Get current subcommand for input.
+        // Don't complete anything else for the help command.
+        let (subcommand, subcommand_field, subcommand_fuzzy) = if help_field.is_some() {
+            self.command_from_input(&line[1..])
+        } else {
+            self.command_from_input(&line)
+        };
+
+        // Split off words after subcommand
+        let after_subcommand = if let Some(sf) = subcommand_field {
+            if pos <= sf.position.start {
+                // Cursor before current subcommand, short circuit.
+                return (3, Vec::with_capacity(0));
+            } else if Some(sf) == at_cursor {
+                // Cursor at current subcommand, complete fuzzy match.
+                return (
+                    sf.position.start,
+                    vec![CompletionCandidate::from_subcommand(
+                        subcommand_fuzzy.unwrap(),
+                    )],
+                );
+            }
+
+            let (_, _, after) = line.split_at_pos(sf.position.end);
+            after
+        } else {
+            &line
+        };
+
+        if subcommand.p.has_subcommands() {
+            // Short circuit if help is current command.
+            if let Some(f) = after_subcommand.first() {
+                if f.parsed == "help" {
+                    return (4, Vec::with_capacity(0));
+                }
+            }
+
+            // If no fields after subcommand, or partial subcommand under cursor as first field,
+            // suggest subcommands.
+            if after_subcommand.first() == at_cursor {
+                return if subcommand_field.is_none() && at_cursor.is_some() {
+                    // Completing argument/option for unknown command
+                    (5, Vec::with_capacity(0))
+                } else {
+                    // Complete empty subcommand.
+                    let completions = get_subcommands_names(subcommand).collect();
+
+                    let insert_pos = match (help_field, subcommand_field) {
+                        (Some(help), None) => help.position.end + 1,
+                        (_, Some(sub)) => sub.position.end + 1,
+                        _ => 0,
+                    };
+
+                    (insert_pos, completions)
+                };
+            }
+        }
+
+        // Don't complete anything else for the help command.
+        if help_field.is_some() {
+            return (6, Vec::with_capacity(0));
+        }
+
+        // Try to auto-complete word under cursor. arguments > options
+        if let Some(arg_at_cursor) = at_cursor.filter(|&f| f.is_argument() || f.parsed == "-") {
+            if arg_at_cursor.kind == FieldType::ArgShort
+                && !arg_at_cursor
+                    .argument_name_and_value()
+                    .0
+                    .unwrap_or_default()
+                    .is_empty()
+            {
+                // Complete short arg.
+                return (7, Vec::with_capacity(0));
+            }
+
+            let completions =
+                get_subcommand_options(subcommand, Some(arg_at_cursor), after_subcommand, false)
+                    .chain(get_subcommand_flags(
+                        subcommand,
+                        Some(arg_at_cursor),
+                        after_subcommand,
+                    ))
+                    .collect();
+
+            return (arg_at_cursor.position.start, completions);
+        }
+
+        if let Some(last_before_cursor) = before_cursor.last() {
+            if get_subcommand_option_value_expected(subcommand, last_before_cursor) {
+                return (8, Vec::with_capacity(0));
+            } else if at_cursor.is_none() {
+                let completions =
+                    get_subcommand_options(subcommand, None, after_subcommand, true).collect();
+                return (last_before_cursor.position.end + 1, completions);
+            }
+        }
+
+        (9, Vec::with_capacity(0))
+    }
 }
 
 impl Debug for Matcher<'_, '_> {
@@ -164,127 +282,49 @@ impl Completer for Matcher<'_, '_> {
     ) -> Result<(usize, Vec<Self::Candidate>), rustyline::error::ReadlineError> {
         // Parse entire input into words.
         // If there were mismatched quotes, short-circuit.
-        let fields = if let Ok(w) = split(line) {
-            w
-        } else {
-            return Ok((0, Vec::with_capacity(0)));
-        };
-
-        // Split off fields before, at and after cursor.
-        let (before_cursor, at_cursor, _) = fields.split_at_pos(pos);
-
-        // If cursor past a double dash, short circuit.
-        if before_cursor.has_double_dash() {
-            return Ok((1, Vec::with_capacity(0)));
-        }
-
-        // If cursor inside a quoted string, short circuit
-        if at_cursor.iter().any(|&f| f.is_quoted()) {
-            return Ok((2, Vec::with_capacity(0)));
-        }
-
-        // Enable special handling for the help command.
-        let help_field = before_cursor.match_first("help");
-
-        // Get current subcommand for input.
-        // Don't complete anything else for the help command.
-        let (subcommand, subcommand_field, subcommand_fuzzy) = if help_field.is_some() {
-            self.command_from_input(&fields[1..])
-        } else {
-            self.command_from_input(&fields)
-        };
-
-        // Split off words after subcommand
-        let after_subcommand = if let Some(sf) = subcommand_field {
-            if pos <= sf.position.start {
-                // Cursor before current subcommand, short circuit.
-                return Ok((3, Vec::with_capacity(0)));
-            } else if Some(sf) == at_cursor {
-                // Cursor at current subcommand, complete fuzzy match.
-                return Ok((
-                    sf.position.start,
-                    vec![CompletionCandidate::from_subcommand(
-                        subcommand_fuzzy.unwrap(),
-                    )],
-                ));
-            }
-
-            let (_, _, after) = fields.split_at_pos(sf.position.end);
-            after
-        } else {
-            &fields
-        };
-
-        if subcommand.p.has_subcommands() {
-            // Short circuit if help is current command.
-            if let Some(f) = after_subcommand.first() {
-                if f.parsed == "help" {
-                    return Ok((4, Vec::with_capacity(0)));
+        let fields = match split(line) {
+            Ok(f) => f,
+            Err(MismatchedQuotes(quotes_pos)) => {
+                return if pos == line.len() {
+                    let candidate = CompletionCandidate {
+                        replacement: String::from(line.chars().nth(quotes_pos).unwrap()),
+                        kind: CandidateType::MismatchedQuote,
+                    };
+                    Ok((pos, vec![candidate]))
+                } else {
+                    Ok((0, Vec::with_capacity(0)))
                 }
             }
+        };
 
-            // If no fields after subcommand, or partial subcommand under cursor as first field,
-            // suggest subcommands.
-            if after_subcommand.first() == at_cursor {
-                return if subcommand_field.is_none() && at_cursor.is_some() {
-                    // Completing argument/option for unknown command
-                    Ok((5, Vec::with_capacity(0)))
-                } else {
-                    // Complete empty subcommand.
-                    let completions = get_subcommands_names(subcommand).collect();
+        Ok(self.complete_fields(&fields, pos))
+    }
+}
 
-                    let insert_pos = match (help_field, subcommand_field) {
-                        (Some(help), None) => help.position.end + 1,
-                        (_, Some(sub)) => sub.position.end + 1,
-                        _ => 0,
+impl Hinter for Matcher<'_, '_> {
+    fn hint(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> Option<String> {
+        // Don't show hints if the cursor is not at the end of the string.
+        if pos != line.len() {
+            return None;
+        }
+
+        // Try to auto-complete. If only one completion available, display hint.
+        match split(line) {
+            Ok(fields) => {
+                let (_, completions) = self.complete_fields(&fields, pos);
+                if completions.len() == 1 {
+                    return if let (_, Some(at_cursor), _) = fields.split_at_pos(pos) {
+                        Some(completions[0].replacement[at_cursor.parsed.len()..].to_string())
+                    } else {
+                        Some(completions.into_iter().next().unwrap().replacement)
                     };
-
-                    Ok((insert_pos, completions))
-                };
+                }
+            }
+            Err(MismatchedQuotes(quotes_pos)) => {
+                return Some(String::from(line.chars().nth(quotes_pos).unwrap()));
             }
         }
-
-        // Don't complete anything else for the help command.
-        if help_field.is_some() {
-            return Ok((6, Vec::with_capacity(0)));
-        }
-
-        // Try to auto-complete word under cursor. arguments > options
-        if let Some(arg_at_cursor) = at_cursor.filter(|&f| f.is_argument() || f.parsed == "-") {
-            if arg_at_cursor.kind == FieldType::ArgShort
-                && !arg_at_cursor
-                    .argument_name_and_value()
-                    .0
-                    .unwrap_or_default()
-                    .is_empty()
-            {
-                // Complete short arg.
-                return Ok((7, Vec::with_capacity(0)));
-            }
-
-            let completions =
-                get_subcommand_options(subcommand, Some(arg_at_cursor), after_subcommand, false)
-                    .chain(get_subcommand_flags(
-                        subcommand,
-                        Some(arg_at_cursor),
-                        after_subcommand,
-                    ))
-                    .collect();
-
-            return Ok((arg_at_cursor.position.start, completions));
-        }
-
-        if let Some(last_before_cursor) = before_cursor.last() {
-            if get_subcommand_option_value_expected(subcommand, last_before_cursor) {
-                return Ok((8, Vec::with_capacity(0)));
-            } else if at_cursor.is_none() {
-                let completions =
-                    get_subcommand_options(subcommand, None, after_subcommand, true).collect();
-                return Ok((last_before_cursor.position.end + 1, completions));
-            }
-        }
-
-        Ok((9, Vec::with_capacity(0)))
+        None
     }
 }
 
@@ -448,7 +488,7 @@ fn get_subcommand_options<'a>(
 impl CompletionCandidate {
     fn from_subcommand(fuzzy: &str) -> Self {
         CompletionCandidate {
-            kind: Command,
+            kind: CandidateType::Command,
             replacement: String::from(fuzzy),
         }
     }
@@ -531,11 +571,13 @@ impl From<clap::Error> for Error {
 #[cfg(test)]
 mod tests {
     use crate::clap::{Matcher, GLOBAL_CLAP_SETTINGS};
+    use crate::readline::CandidateType;
     use crate::readline::CandidateType::{Argument, Command};
     use crate::shlex::split;
     use crate::Config;
     use clap::{App, AppSettings, Arg, ErrorKind, SubCommand};
     use rustyline::completion::Completer;
+    use rustyline::hint::Hinter;
     use rustyline::history::History;
     use rustyline::Context;
     use std::borrow::Cow;
@@ -861,6 +903,38 @@ mod tests {
 
         assert_eq!(result.0, 0);
         assert_eq!(result.1.capacity(), 0);
+    }
+
+    #[test]
+    fn test_clap_completion_matches_mismatched_double_quotes() {
+        let app = clap::App::new("prog");
+        let mut slaps = Matcher::with_name_and_config("slaps", Config::default());
+        slaps.register_command(app);
+
+        let result = slaps
+            .complete("pr \"", 4, &Context::new(&History::new()))
+            .unwrap();
+
+        assert_eq!(result.0, 4);
+        assert_eq!(result.1.len(), 1);
+        assert_eq!(result.1[0].kind, CandidateType::MismatchedQuote);
+        assert_eq!(result.1[0].replacement, "\"");
+    }
+
+    #[test]
+    fn test_clap_completion_matches_mismatched_single_quotes() {
+        let app = clap::App::new("prog");
+        let mut slaps = Matcher::with_name_and_config("slaps", Config::default());
+        slaps.register_command(app);
+
+        let result = slaps
+            .complete("pr '", 4, &Context::new(&History::new()))
+            .unwrap();
+
+        assert_eq!(result.0, 4);
+        assert_eq!(result.1.len(), 1);
+        assert_eq!(result.1[0].kind, CandidateType::MismatchedQuote);
+        assert_eq!(result.1[0].replacement, "'");
     }
 
     #[test]
@@ -1807,5 +1881,86 @@ mod tests {
         assert_eq!(result.1[0].replacement, "--this");
         assert_eq!(result.1[1].kind, Argument);
         assert_eq!(result.1[1].replacement, "--that");
+    }
+
+    #[test]
+    fn test_clap_hinter_single_completion_only() {
+        let app = clap::App::new("slaps")
+            .arg(Arg::with_name("this").long("this").takes_value(true))
+            .arg(Arg::with_name("that").long("that").takes_value(false));
+        let mut slaps = Matcher::with_name_and_config("slaps", Config::default());
+        slaps.register_command(app);
+
+        let result = slaps.hint("slaps --t", 9, &Context::new(&History::new()));
+
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_clap_hinter_mismatched_quotes_single() {
+        let app = clap::App::new("slaps")
+            .arg(Arg::with_name("this").long("this").takes_value(true))
+            .arg(Arg::with_name("that").long("that").takes_value(false));
+        let mut slaps = Matcher::with_name_and_config("slaps", Config::default());
+        slaps.register_command(app);
+
+        let result = slaps.hint("slaps '", 7, &Context::new(&History::new()));
+
+        assert_eq!(result.as_deref(), Some("'"));
+    }
+
+    #[test]
+    fn test_clap_hinter_mismatched_quotes_double() {
+        let app = clap::App::new("slaps")
+            .arg(Arg::with_name("this").long("this").takes_value(true))
+            .arg(Arg::with_name("that").long("that").takes_value(false));
+        let mut slaps = Matcher::with_name_and_config("slaps", Config::default());
+        slaps.register_command(app);
+
+        let result = slaps.hint("slaps \"", 7, &Context::new(&History::new()));
+
+        assert_eq!(result.as_deref(), Some("\""));
+    }
+
+    #[test]
+    fn test_clap_hinter_cursor_at_end_of_input_only() {
+        let app = clap::App::new("slaps")
+            .arg(Arg::with_name("this").long("this").takes_value(true))
+            .arg(Arg::with_name("that").long("that").takes_value(false));
+        let mut slaps = Matcher::with_name_and_config("slaps", Config::default());
+        slaps.register_command(app);
+
+        let result = slaps.hint("slaps '", 6, &Context::new(&History::new()));
+
+        assert_eq!(result.as_deref(), None);
+    }
+
+    #[test]
+    fn test_clap_hinter_truncates_start_of_suggestion() {
+        let app = clap::App::new("slaps")
+            .arg(Arg::with_name("this").long("this").takes_value(true))
+            .arg(Arg::with_name("that").long("that").takes_value(false));
+        let mut slaps = Matcher::with_name_and_config("slaps", Config::default());
+        slaps.register_command(app);
+
+        let result = slaps.hint("slaps --thi", 11, &Context::new(&History::new()));
+
+        assert_eq!(result.as_deref(), Some("s"));
+    }
+
+    #[test]
+    fn test_clap_hinter_from_empty() {
+        let app = clap::App::new("slaps").arg(
+            Arg::with_name("this")
+                .long("this")
+                .takes_value(true)
+                .required(true),
+        );
+        let mut slaps = Matcher::with_name_and_config("slaps", Config::default());
+        slaps.register_command(app);
+
+        let result = slaps.hint("slaps ", 6, &Context::new(&History::new()));
+
+        assert_eq!(result.as_deref(), Some("--this"));
     }
 }

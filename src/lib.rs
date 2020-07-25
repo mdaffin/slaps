@@ -130,12 +130,13 @@ impl<'a, 'b> Slaps<'a, 'b> {
     /// Will return an error when it fails to read more input.
     pub fn run(mut self) -> Result<(), Error> {
         loop {
-            let input = match readline::Readline::with_completer(self.config, &self.matcher)
-                .prompt_line(self.config.prompt)
-            {
-                Ok(i) => i,
-                Err(e) => return Err(Error::ReadlineError(e)),
-            };
+            let input =
+                match readline::Readline::with_helper(self.config, &self.matcher, &self.matcher)
+                    .prompt_line(self.config.prompt)
+                {
+                    Ok(i) => i,
+                    Err(e) => return Err(Error::ReadlineError(e)),
+                };
 
             match self.get_matches(&input) {
                 Err(Error::ClapError(e)) => match e.kind {

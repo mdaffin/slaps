@@ -28,12 +28,15 @@ impl<'a> Readline<'a> {
         }
     }
 
-    pub fn with_completer(
+    pub fn with_helper(
         config: Config,
         completer: &'a (dyn Completer<Candidate = CompletionCandidate> + 'a),
+        hinter: &'a dyn Hinter,
     ) -> Self {
         let mut readline = Self::new(config);
-        readline.editor.set_helper(Some(Helper { completer }));
+        readline
+            .editor
+            .set_helper(Some(Helper { completer, hinter }));
         readline
     }
 
@@ -154,6 +157,7 @@ impl Into<rustyline::CompletionType> for CompletionType {
 #[derive(Clone, Copy)]
 pub struct Helper<'a> {
     completer: &'a dyn Completer<Candidate = CompletionCandidate>,
+    hinter: &'a dyn Hinter,
 }
 
 impl Completer for Helper<'_> {
@@ -173,7 +177,11 @@ impl Completer for Helper<'_> {
     }
 }
 
-impl Hinter for Helper<'_> {}
+impl Hinter for Helper<'_> {
+    fn hint(&self, line: &str, pos: usize, ctx: &Context<'_>) -> Option<String> {
+        self.hinter.hint(line, pos, ctx)
+    }
+}
 
 impl Validator for Helper<'_> {}
 
@@ -199,6 +207,7 @@ impl Candidate for CompletionCandidate {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum CandidateType {
+    MismatchedQuote,
     Value,
     Command,
     Argument,
