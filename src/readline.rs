@@ -5,7 +5,7 @@
  */
 
 use crate::{ColorMode, CompletionType, Config};
-use rustyline::completion::{Candidate, Completer};
+use rustyline::completion::Completer;
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
@@ -32,7 +32,7 @@ impl<'a> Readline<'a> {
 
     pub fn with_helper(
         config: Config,
-        completer: &'a (dyn Completer<Candidate = CompletionCandidate> + 'a),
+        completer: &'a (dyn Completer<Candidate = String> + 'a),
         hinter: &'a dyn Hinter,
         highlighter: &'a dyn Highlighter,
     ) -> Self {
@@ -161,13 +161,13 @@ impl Into<rustyline::CompletionType> for CompletionType {
 
 #[derive(Clone, Copy)]
 pub struct Helper<'a> {
-    completer: &'a dyn Completer<Candidate = CompletionCandidate>,
+    completer: &'a dyn Completer<Candidate = String>,
     hinter: &'a dyn Hinter,
     highlighter: &'a dyn Highlighter,
 }
 
 impl Completer for Helper<'_> {
-    type Candidate = CompletionCandidate;
+    type Candidate = String;
 
     fn complete(
         &self,
@@ -211,30 +211,6 @@ impl Highlighter for Helper<'_> {
 }
 
 impl rustyline::Helper for Helper<'_> {}
-
-#[derive(Debug, Clone)]
-pub struct CompletionCandidate {
-    pub replacement: String,
-    pub kind: CandidateType,
-}
-
-impl Candidate for CompletionCandidate {
-    fn display(&self) -> &str {
-        &self.replacement
-    }
-
-    fn replacement(&self) -> &str {
-        &self.replacement
-    }
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum CandidateType {
-    MismatchedQuote,
-    Value,
-    Command,
-    Argument,
-}
 
 #[cfg(test)]
 mod test {

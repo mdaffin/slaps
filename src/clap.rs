@@ -4,7 +4,6 @@
  * License: WTFPL
  */
 
-use crate::readline::{CandidateType, CompletionCandidate};
 use crate::shlex::{split, Field, FieldMatcher, FieldType};
 use crate::{Config, MismatchedQuotes};
 use clap::ArgSettings;
@@ -149,7 +148,7 @@ impl<'a, 'b> Matcher<'a, 'b> {
         }
     }
 
-    fn complete_fields(&self, line: &[Field], pos: usize) -> (usize, Vec<CompletionCandidate>) {
+    fn complete_fields(&self, line: &[Field], pos: usize) -> (usize, Vec<String>) {
         // Split off fields before, at and after cursor.
         let (before_cursor, at_cursor, _) = line.split_at_pos(pos);
 
@@ -183,9 +182,7 @@ impl<'a, 'b> Matcher<'a, 'b> {
                 // Cursor at current subcommand, complete fuzzy match.
                 return (
                     sf.position.start,
-                    vec![CompletionCandidate::from_subcommand(
-                        subcommand_fuzzy.unwrap(),
-                    )],
+                    vec![String::from(subcommand_fuzzy.unwrap())],
                 );
             }
 
@@ -275,7 +272,7 @@ impl Debug for Matcher<'_, '_> {
 }
 
 impl Completer for Matcher<'_, '_> {
-    type Candidate = CompletionCandidate;
+    type Candidate = String;
 
     #[allow(clippy::too_many_lines)]
     fn complete(
@@ -290,10 +287,7 @@ impl Completer for Matcher<'_, '_> {
             Ok(f) => f,
             Err(MismatchedQuotes(quotes_pos)) => {
                 return if pos == line.len() {
-                    let candidate = CompletionCandidate {
-                        replacement: String::from(line.chars().nth(quotes_pos).unwrap()),
-                        kind: CandidateType::MismatchedQuote,
-                    };
+                    let candidate = String::from(line.chars().nth(quotes_pos).unwrap());
                     Ok((pos, vec![candidate]))
                 } else {
                     Ok((0, Vec::with_capacity(0)))
@@ -318,9 +312,9 @@ impl Hinter for Matcher<'_, '_> {
                 let (_, completions) = self.complete_fields(&fields, pos);
                 if completions.len() == 1 {
                     return if let (_, Some(at_cursor), _) = fields.split_at_pos(pos) {
-                        Some(completions[0].replacement[at_cursor.parsed.len()..].to_string())
+                        Some(completions[0][at_cursor.parsed.len()..].to_string())
                     } else {
-                        Some(completions.into_iter().next().unwrap().replacement)
+                        Some(completions.into_iter().next().unwrap())
                     };
                 }
             }
@@ -435,16 +429,16 @@ impl Highlighter for Matcher<'_, '_> {
     }
 }
 
-fn get_subcommands_names(app: &clap::App) -> impl Iterator<Item = CompletionCandidate> {
+fn get_subcommands_names(app: &clap::App) -> impl Iterator<Item = String> {
     app.p
         .subcommands
         .iter()
-        .map(|s| CompletionCandidate::from_subcommand(s.p.meta.name.as_str()))
+        .map(|s| s.p.meta.name.clone())
         .sorted_by(|a, b| {
-            if b.replacement == "quit" {
+            if b == "quit" {
                 Ordering::Less
             } else {
-                a.replacement.cmp(&b.replacement)
+                a.cmp(&b)
             }
         })
 }
@@ -453,7 +447,7 @@ fn get_subcommand_flags<'a>(
     app: &'a clap::App,
     current: Option<&Field>,
     missing: &[Field],
-) -> impl Iterator<Item = CompletionCandidate> + 'a {
+) -> impl Iterator<Item = String> + 'a {
     app.p
         .flags
         .iter()
@@ -499,13 +493,10 @@ fn get_subcommand_flags<'a>(
                 }
             }
         })
-        .map(move |a| CompletionCandidate {
-            kind: CandidateType::Argument,
-            replacement: match (a.s.short, a.s.long) {
-                (_, Some(l)) => format!("--{}", l),
-                (Some(s), _) => format!("-{}", s),
-                _ => unreachable!(),
-            },
+        .map(move |a| match (a.s.short, a.s.long) {
+            (_, Some(l)) => format!("--{}", l),
+            (Some(s), _) => format!("-{}", s),
+            _ => unreachable!(),
         })
 }
 
@@ -533,7 +524,7 @@ fn get_subcommand_options<'a>(
     current: Option<&Field>,
     missing: &[Field],
     required: bool,
-) -> impl Iterator<Item = CompletionCandidate> + 'a {
+) -> impl Iterator<Item = String> + 'a {
     app.p
         .opts
         .iter()
@@ -582,23 +573,11 @@ fn get_subcommand_options<'a>(
                 }
             }
         })
-        .map(move |a| CompletionCandidate {
-            kind: CandidateType::Argument,
-            replacement: match (a.s.short, a.s.long) {
-                (_, Some(l)) => format!("--{}", l),
-                (Some(s), _) => format!("-{}", s),
-                _ => unreachable!(),
-            },
+        .map(move |a| match (a.s.short, a.s.long) {
+            (_, Some(l)) => format!("--{}", l),
+            (Some(s), _) => format!("-{}", s),
+            _ => unreachable!(),
         })
-}
-
-impl CompletionCandidate {
-    fn from_subcommand(fuzzy: &str) -> Self {
-        CompletionCandidate {
-            kind: CandidateType::Command,
-            replacement: String::from(fuzzy),
-        }
-    }
 }
 
 /// Command Line Argument Parser Error
@@ -678,8 +657,6 @@ impl From<clap::Error> for Error {
 #[cfg(test)]
 mod tests {
     use crate::clap::{Matcher, GLOBAL_CLAP_SETTINGS};
-    use crate::readline::CandidateType;
-    use crate::readline::CandidateType::{Argument, Command};
     use crate::shlex::split;
     use crate::Config;
     use clap::{App, AppSettings, Arg, ErrorKind, SubCommand};
@@ -1025,8 +1002,7 @@ mod tests {
 
         assert_eq!(result.0, 4);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, CandidateType::MismatchedQuote);
-        assert_eq!(result.1[0].replacement, "\"");
+        assert_eq!(result.1[0], "\"");
     }
 
     #[test]
@@ -1041,8 +1017,7 @@ mod tests {
 
         assert_eq!(result.0, 4);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, CandidateType::MismatchedQuote);
-        assert_eq!(result.1[0].replacement, "'");
+        assert_eq!(result.1[0], "'");
     }
 
     #[test]
@@ -1085,8 +1060,7 @@ mod tests {
 
         assert_eq!(result.0, 5);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Command);
-        assert_eq!(result.1[0].replacement, "prog");
+        assert_eq!(result.1[0], "prog");
     }
 
     #[test]
@@ -1115,8 +1089,7 @@ mod tests {
 
         assert_eq!(result.0, 0);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Command);
-        assert_eq!(result.1[0].replacement, "prog");
+        assert_eq!(result.1[0], "prog");
     }
 
     #[test]
@@ -1145,8 +1118,7 @@ mod tests {
 
         assert_eq!(result.0, 5);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Command);
-        assert_eq!(result.1[0].replacement, "slaps");
+        assert_eq!(result.1[0], "slaps");
     }
 
     #[test]
@@ -1161,8 +1133,7 @@ mod tests {
 
         assert_eq!(result.0, 0);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Command);
-        assert_eq!(result.1[0].replacement, "prog");
+        assert_eq!(result.1[0], "prog");
     }
 
     #[test]
@@ -1177,8 +1148,7 @@ mod tests {
 
         assert_eq!(result.0, 5);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Command);
-        assert_eq!(result.1[0].replacement, "slaps");
+        assert_eq!(result.1[0], "slaps");
     }
 
     #[test]
@@ -1193,8 +1163,7 @@ mod tests {
 
         assert_eq!(result.0, 0);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Command);
-        assert_eq!(result.1[0].replacement, "prog");
+        assert_eq!(result.1[0], "prog");
     }
 
     #[test]
@@ -1209,8 +1178,7 @@ mod tests {
 
         assert_eq!(result.0, 0);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Command);
-        assert_eq!(result.1[0].replacement, "slaps");
+        assert_eq!(result.1[0], "slaps");
     }
 
     #[test]
@@ -1225,8 +1193,7 @@ mod tests {
 
         assert_eq!(result.0, 5);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Command);
-        assert_eq!(result.1[0].replacement, "that");
+        assert_eq!(result.1[0], "that");
     }
 
     #[test]
@@ -1245,8 +1212,7 @@ mod tests {
 
         assert_eq!(result.0, 7);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--arg");
+        assert_eq!(result.1[0], "--arg");
     }
 
     #[test]
@@ -1265,8 +1231,7 @@ mod tests {
 
         assert_eq!(result.0, 10);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--arg");
+        assert_eq!(result.1[0], "--arg");
     }
 
     #[test]
@@ -1328,8 +1293,7 @@ mod tests {
 
         assert_eq!(result.0, 11);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--that");
+        assert_eq!(result.1[0], "--that");
 
         let result = slaps
             .complete("prog slaps --", 13, &Context::new(&History::new()))
@@ -1337,8 +1301,7 @@ mod tests {
 
         assert_eq!(result.0, 11);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--that");
+        assert_eq!(result.1[0], "--that");
 
         let result = slaps
             .complete("prog slaps --t", 14, &Context::new(&History::new()))
@@ -1346,8 +1309,7 @@ mod tests {
 
         assert_eq!(result.0, 11);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--that");
+        assert_eq!(result.1[0], "--that");
     }
 
     #[test]
@@ -1364,8 +1326,7 @@ mod tests {
 
         assert_eq!(result.0, 11);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "-t");
+        assert_eq!(result.1[0], "-t");
     }
 
     #[test]
@@ -1383,8 +1344,7 @@ mod tests {
 
         assert_eq!(result.0, 11);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--that");
+        assert_eq!(result.1[0], "--that");
 
         let result = slaps
             .complete("prog slaps --", 13, &Context::new(&History::new()))
@@ -1392,8 +1352,7 @@ mod tests {
 
         assert_eq!(result.0, 11);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--that");
+        assert_eq!(result.1[0], "--that");
 
         let result = slaps
             .complete("prog slaps --t", 14, &Context::new(&History::new()))
@@ -1401,8 +1360,7 @@ mod tests {
 
         assert_eq!(result.0, 11);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--that");
+        assert_eq!(result.1[0], "--that");
     }
 
     #[test]
@@ -1420,8 +1378,7 @@ mod tests {
 
         assert_eq!(result.0, 11);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "-t");
+        assert_eq!(result.1[0], "-t");
 
         let result = slaps
             .complete("prog slaps --", 13, &Context::new(&History::new()))
@@ -1482,8 +1439,7 @@ mod tests {
 
         assert_eq!(result.0, 11);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "-t");
+        assert_eq!(result.1[0], "-t");
     }
 
     #[test]
@@ -1505,8 +1461,7 @@ mod tests {
 
         assert_eq!(result.0, 11);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--that");
+        assert_eq!(result.1[0], "--that");
     }
 
     #[test]
@@ -1550,12 +1505,9 @@ mod tests {
 
         assert_eq!(result.0, 0);
         assert_eq!(result.1.len(), 3);
-        assert_eq!(result.1[0].kind, Command);
-        assert_eq!(result.1[0].replacement, "prog");
-        assert_eq!(result.1[1].kind, Command);
-        assert_eq!(result.1[1].replacement, "slaps");
-        assert_eq!(result.1[2].kind, Command);
-        assert_eq!(result.1[2].replacement, "quit");
+        assert_eq!(result.1[0], "prog");
+        assert_eq!(result.1[1], "slaps");
+        assert_eq!(result.1[2], "quit");
     }
 
     #[test]
@@ -1615,8 +1567,7 @@ mod tests {
 
         assert_eq!(result.0, 9);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "-v");
+        assert_eq!(result.1[0], "-v");
     }
 
     #[test]
@@ -1632,8 +1583,7 @@ mod tests {
 
         assert_eq!(result.0, 16);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--verbose");
+        assert_eq!(result.1[0], "--verbose");
     }
 
     #[test]
@@ -1653,8 +1603,7 @@ mod tests {
 
         assert_eq!(result.0, 9);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--verbose");
+        assert_eq!(result.1[0], "--verbose");
     }
 
     #[test]
@@ -1671,10 +1620,8 @@ mod tests {
 
         assert_eq!(result.0, 6);
         assert_eq!(result.1.len(), 2);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "-a");
-        assert_eq!(result.1[1].kind, Argument);
-        assert_eq!(result.1[1].replacement, "-t");
+        assert_eq!(result.1[0], "-a");
+        assert_eq!(result.1[1], "-t");
     }
 
     #[test]
@@ -1691,10 +1638,8 @@ mod tests {
 
         assert_eq!(result.0, 6);
         assert_eq!(result.1.len(), 2);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--that");
-        assert_eq!(result.1[1].kind, Argument);
-        assert_eq!(result.1[1].replacement, "--this");
+        assert_eq!(result.1[0], "--that");
+        assert_eq!(result.1[1], "--this");
     }
 
     #[test]
@@ -1711,10 +1656,8 @@ mod tests {
 
         assert_eq!(result.0, 6);
         assert_eq!(result.1.len(), 2);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--this");
-        assert_eq!(result.1[1].kind, Argument);
-        assert_eq!(result.1[1].replacement, "-a");
+        assert_eq!(result.1[0], "--this");
+        assert_eq!(result.1[1], "-a");
     }
 
     #[test]
@@ -1731,10 +1674,8 @@ mod tests {
 
         assert_eq!(result.0, 6);
         assert_eq!(result.1.len(), 2);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--this");
-        assert_eq!(result.1[1].kind, Argument);
-        assert_eq!(result.1[1].replacement, "--that");
+        assert_eq!(result.1[0], "--this");
+        assert_eq!(result.1[1], "--that");
     }
 
     #[test]
@@ -1751,10 +1692,8 @@ mod tests {
 
         assert_eq!(result.0, 6);
         assert_eq!(result.1.len(), 2);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "-a");
-        assert_eq!(result.1[1].kind, Argument);
-        assert_eq!(result.1[1].replacement, "-t");
+        assert_eq!(result.1[0], "-a");
+        assert_eq!(result.1[1], "-t");
     }
 
     #[test]
@@ -1771,10 +1710,8 @@ mod tests {
 
         assert_eq!(result.0, 6);
         assert_eq!(result.1.len(), 2);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--that");
-        assert_eq!(result.1[1].kind, Argument);
-        assert_eq!(result.1[1].replacement, "--this");
+        assert_eq!(result.1[0], "--that");
+        assert_eq!(result.1[1], "--this");
     }
 
     #[test]
@@ -1791,10 +1728,8 @@ mod tests {
 
         assert_eq!(result.0, 6);
         assert_eq!(result.1.len(), 2);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--this");
-        assert_eq!(result.1[1].kind, Argument);
-        assert_eq!(result.1[1].replacement, "-a");
+        assert_eq!(result.1[0], "--this");
+        assert_eq!(result.1[1], "-a");
     }
 
     #[test]
@@ -1816,10 +1751,8 @@ mod tests {
 
         assert_eq!(result.0, 6);
         assert_eq!(result.1.len(), 2);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--this");
-        assert_eq!(result.1[1].kind, Argument);
-        assert_eq!(result.1[1].replacement, "--that");
+        assert_eq!(result.1[0], "--this");
+        assert_eq!(result.1[1], "--that");
     }
 
     #[test]
@@ -1894,8 +1827,7 @@ mod tests {
 
         assert_eq!(result.0, 11);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "-v");
+        assert_eq!(result.1[0], "-v");
     }
 
     #[test]
@@ -1915,8 +1847,7 @@ mod tests {
 
         assert_eq!(result.0, 18);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--verbose");
+        assert_eq!(result.1[0], "--verbose");
     }
 
     #[test]
@@ -1937,8 +1868,7 @@ mod tests {
 
         assert_eq!(result.0, 11);
         assert_eq!(result.1.len(), 1);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--verbose");
+        assert_eq!(result.1[0], "--verbose");
     }
 
     #[test]
@@ -1965,10 +1895,8 @@ mod tests {
 
         assert_eq!(result.0, 6);
         assert_eq!(result.1.len(), 2);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--this");
-        assert_eq!(result.1[1].kind, Argument);
-        assert_eq!(result.1[1].replacement, "--that");
+        assert_eq!(result.1[0], "--this");
+        assert_eq!(result.1[1], "--that");
     }
 
     #[test]
@@ -1985,10 +1913,8 @@ mod tests {
 
         assert_eq!(result.0, 6);
         assert_eq!(result.1.len(), 2);
-        assert_eq!(result.1[0].kind, Argument);
-        assert_eq!(result.1[0].replacement, "--this");
-        assert_eq!(result.1[1].kind, Argument);
-        assert_eq!(result.1[1].replacement, "--that");
+        assert_eq!(result.1[0], "--this");
+        assert_eq!(result.1[1], "--that");
     }
 
     #[test]
