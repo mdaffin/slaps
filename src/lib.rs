@@ -27,7 +27,7 @@ pub mod shlex;
 
 use crate::readline::Readline;
 pub use config::{ColorMode, CompletionType, Config};
-pub use error::{ClapError, Error, ErrorKind, MismatchedQuotes, ReadlineError};
+pub use error::{ClapError, Error, ErrorKind, ExecutionError, MismatchedQuotes, ReadlineError};
 
 /// Interactive shell mode using a `clap`/`structopt` configuration.
 #[derive(Debug)]
@@ -74,12 +74,16 @@ impl<'a, 'b> Slaps<'a, 'b> {
     /// use clap::App;
     /// use slaps::Slaps;
     ///
-    /// let slaps = Slaps::with_name("slaps").subcommand(App::new("slap"));
+    /// let slaps = Slaps::with_name("slaps")
+    ///     .subcommand(App::new("slap"), |matches| {println!("{:?}", matches); Ok(())} );
     /// ```
     #[must_use]
-    pub fn subcommand(mut self, command: clap::App<'a, 'a>) -> Self {
-        self.matcher.register_command(command);
-
+    pub fn subcommand<T: 'b>(mut self, command: clap::App<'a, 'b>, handler: T) -> Self
+    where
+        T: Fn(&clap::ArgMatches) -> Result<(), ExecutionError> + Send + Sync,
+    {
+        self.matcher
+            .register_command_with_handler(command, Box::new(handler));
         self
     }
 
@@ -114,7 +118,7 @@ impl<'a, 'b> Slaps<'a, 'b> {
     /// use slaps::Slaps;
     ///
     /// let command = App::new("slaps").arg(Arg::with_name("that").long("that").takes_value(true));
-    /// let mut slaps = Slaps::with_name("slaps").subcommand(command);
+    /// let mut slaps = Slaps::with_name("slaps").subcommand(command, |args| Ok(()));
     /// let matches = slaps.get_matches("slaps --that arg").unwrap();
     ///
     /// assert_eq!(matches.subcommand_name(), Some("slaps"));
@@ -143,7 +147,15 @@ impl<'a, 'b> Slaps<'a, 'b> {
                 Err(e) => return Err(Error::ReadlineError(e)),
             };
 
-            match self.get_matches(&input) {
+            let fields = match shlex::split(&input) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("{}", e);
+                    continue;
+                }
+            };
+
+            match self.matcher.handle_matches(&fields) {
                 Err(Error::ClapError(e)) => match e.kind {
                     clap::ErrorKind::Io | ErrorKind::Format => return Err(Error::ClapError(e)),
                     _ => eprintln!("{}", e),

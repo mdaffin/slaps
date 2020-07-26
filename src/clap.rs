@@ -5,7 +5,7 @@
  */
 
 use crate::shlex::{split, Field, FieldMatcher, FieldType};
-use crate::{Config, MismatchedQuotes};
+use crate::{Config, ExecutionError, MismatchedQuotes};
 use clap::ArgSettings;
 pub use clap::{App, AppSettings, ArgMatches, ErrorKind};
 use itertools::Itertools;
@@ -16,6 +16,7 @@ use rustyline::Context;
 use std::borrow::Cow;
 use std::borrow::Cow::Borrowed;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt::Write;
 use std::fmt::{Debug, Display, Formatter};
@@ -31,11 +32,14 @@ const GLOBAL_CLAP_SETTINGS: &[AppSettings] = &[
     AppSettings::VersionlessSubcommands,
 ];
 
+/// Handler function for a command.
+type Handler<'a> = Box<dyn 'a + Fn(&clap::ArgMatches) -> Result<(), ExecutionError> + Send + Sync>;
+
 /// Uses `clap` to parse arguments for registered commands and provide completions.
-#[derive(Clone)]
 pub(crate) struct Matcher<'a, 'b> {
     clap: App<'a, 'b>,
     config: Config<'b>,
+    handlers: HashMap<String, Handler<'b>>,
 }
 
 impl<'a, 'b> Matcher<'a, 'b> {
@@ -51,7 +55,10 @@ impl<'a, 'b> Matcher<'a, 'b> {
             handlers: HashMap::new(),
         };
 
-        m.register_command(App::new("quit").alias("exit"));
+        m.register_command_with_handler(
+            App::new("quit").alias("exit"),
+            Box::new(|_| Err(ExecutionError::GracefulExit)),
+        );
         m.clap.p.create_help_and_version();
         m.clap.p.set(AppSettings::DisableHelpSubcommand);
 
@@ -66,9 +73,29 @@ impl<'a, 'b> Matcher<'a, 'b> {
         self.clap.p.add_subcommand(subcommand);
     }
 
+    pub fn register_command_with_handler(&mut self, subcommand: App<'a, 'b>, handler: Handler<'b>) {
+        self.handlers
+            .insert(subcommand.get_name().to_string(), handler);
+        self.register_command(subcommand);
+    }
+
     /// Parses the given word slice using clap to return an `ArgMatches` object.
     pub fn get_matches<T: AsRef<OsStr>>(&mut self, input: &[T]) -> Result<ArgMatches, Error> {
         Ok(self.clap.get_matches_from_safe_borrow(input)?)
+    }
+
+    // Parses the given word slice and executes the matched command's handler.
+    pub fn handle_matches<T: AsRef<OsStr>>(&mut self, input: &[T]) -> Result<(), crate::Error> {
+        let matches = self.clap.get_matches_from_safe_borrow(input)?;
+        if let Some(subcommand) = matches.subcommand_name() {
+            if let (Some(handler), Some(subcommand_matches)) = (
+                self.handlers.get_mut(subcommand),
+                matches.subcommand_matches(subcommand),
+            ) {
+                handler(subcommand_matches)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn command_from_input<'c>(
@@ -270,7 +297,13 @@ impl<'a, 'b> Matcher<'a, 'b> {
 
 impl Debug for Matcher<'_, '_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "clap::Matcher {{name = {:?}}}", self.clap.get_name())
+        write!(
+            f,
+            "clap::Matcher {{name = {:?}, config = {:?}, commands = {:?}}}",
+            self.clap.get_name(),
+            self.config,
+            self.handlers.keys()
+        )
     }
 }
 
@@ -602,6 +635,12 @@ impl Display for Error {
 
 impl std::error::Error for Error {}
 
+impl From<clap::Error> for crate::Error {
+    fn from(err: clap::Error) -> Self {
+        Self::ClapError(Error::from(err))
+    }
+}
+
 impl From<clap::Error> for Error {
     fn from(err: clap::Error) -> Self {
         use ErrorKind::{
@@ -705,14 +744,7 @@ mod tests {
         let config = Config::default();
         let matcher = Matcher::with_name_and_config("slaps", config);
 
-        assert_eq!(
-            format!("{:?}", matcher),
-            r#"clap::Matcher {name = "slaps"}"#
-        );
-        assert_eq!(
-            format!("{:?}", matcher.clone()),
-            r#"clap::Matcher {name = "slaps"}"#
-        );
+        assert!(format!("{:?}", matcher).starts_with(r#"clap::Matcher {name = "slaps""#),);
     }
 
     #[test]

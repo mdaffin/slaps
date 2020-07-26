@@ -6,7 +6,7 @@
 pub use crate::clap::{Error as ClapError, ErrorKind};
 pub use crate::readline::Error as ReadlineError;
 pub use crate::shlex::MismatchedQuotes;
-use std::fmt::{Display, Formatter};
+use std::{error, fmt};
 
 /// Variant of all sub-types of errors returned by the library.
 #[allow(clippy::pub_enum_variant_names)]
@@ -20,15 +20,17 @@ pub enum Error {
     ///
     /// Contains the position of the first mismatched quote within the original input.
     MismatchedQuotes(usize),
+    /// Error returned by a command handler.
+    ExecutionError(ExecutionError),
 }
 
-impl Display for Error {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self)
     }
 }
 
-impl std::error::Error for Error {}
+impl error::Error for Error {}
 
 impl From<ClapError> for Error {
     fn from(e: ClapError) -> Self {
@@ -47,3 +49,30 @@ impl From<MismatchedQuotes> for Error {
         Error::MismatchedQuotes(e.0)
     }
 }
+
+impl From<ExecutionError> for Error {
+    fn from(e: ExecutionError) -> Self {
+        Error::ExecutionError(e)
+    }
+}
+
+/// Error variant for command handlers.
+#[derive(Debug)]
+#[allow(clippy::module_name_repetitions)]
+pub enum ExecutionError {
+    /// Program should exit due to a fatal error encountered while executing the command.
+    FatalExit(Box<dyn error::Error>),
+    /// Program should exit gracefully.
+    GracefulExit,
+}
+
+impl fmt::Display for ExecutionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ExecutionError::FatalExit(e) => write!(f, "{}", e),
+            ExecutionError::GracefulExit => write!(f, "Success"),
+        }
+    }
+}
+
+impl error::Error for ExecutionError {}
