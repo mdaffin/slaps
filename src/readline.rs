@@ -113,6 +113,7 @@ impl From<rustyline::error::ReadlineError> for Error {
             ReadlineError::Io(e) => Self::Io(e),
             ReadlineError::Eof => Self::Eof,
             ReadlineError::Interrupted => Self::Interrupted,
+            #[cfg(unix)]
             ReadlineError::Utf8Error => Self::Utf8Error,
             #[cfg(unix)]
             ReadlineError::Errno(e) => Self::Errno(e),
@@ -267,12 +268,13 @@ mod test {
         assert!(matches!(error, Error::Eof));
         assert_eq!(error.to_string(), ReadlineError::Eof.to_string());
 
-        let error = Error::from(ReadlineError::Utf8Error);
-        assert!(matches!(error, Error::Utf8Error));
-        assert_eq!(error.to_string(), ReadlineError::Utf8Error.to_string());
-
+        #[cfg(unix)]
         if cfg!(unix) {
             use nix::errno::Errno;
+            let error = Error::from(ReadlineError::Utf8Error);
+            assert!(matches!(error, Error::Utf8Error));
+            assert_eq!(error.to_string(), ReadlineError::Utf8Error.to_string());
+
             let error = Error::from(ReadlineError::Errno(nix::Error::Sys(Errno::E2BIG)));
             assert!(matches!(error, Error::Errno(_)));
             assert_eq!(
