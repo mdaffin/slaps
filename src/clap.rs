@@ -42,13 +42,20 @@ impl<'a, 'b> Matcher<'a, 'b> {
     /// Initialises clap with settings suitable for interactive usage.
     #[must_use]
     pub fn with_name_and_config(name: &str, config: Config<'b>) -> Self {
-        Matcher {
+        let mut m = Matcher {
             clap: App::new(name)
                 .global_settings(GLOBAL_CLAP_SETTINGS)
                 .setting(AppSettings::NoBinaryName)
                 .template(config.help_template),
             config,
-        }
+            handlers: HashMap::new(),
+        };
+
+        m.register_command(App::new("quit").alias("exit"));
+        m.clap.p.create_help_and_version();
+        m.clap.p.set(AppSettings::DisableHelpSubcommand);
+
+        m
     }
 
     /// Registers a subcommand with clap.
@@ -139,6 +146,9 @@ impl<'a, 'b> Matcher<'a, 'b> {
             command.p.meta.template = Some(self.config.subcommand_help_template_no_args);
         }
 
+        command.p.create_help_and_version();
+        command.p.set(AppSettings::DisableHelpSubcommand);
+
         if command.p.has_subcommands() {
             command
                 .p
@@ -193,13 +203,6 @@ impl<'a, 'b> Matcher<'a, 'b> {
         };
 
         if subcommand.p.has_subcommands() {
-            // Short circuit if help is current command.
-            if let Some(f) = after_subcommand.first() {
-                if f.parsed == "help" {
-                    return (4, Vec::with_capacity(0));
-                }
-            }
-
             // If no fields after subcommand, or partial subcommand under cursor as first field,
             // suggest subcommands.
             if after_subcommand.first() == at_cursor {
@@ -435,8 +438,10 @@ fn get_subcommands_names(app: &clap::App) -> impl Iterator<Item = String> {
         .iter()
         .map(|s| s.p.meta.name.clone())
         .sorted_by(|a, b| {
-            if b == "quit" {
+            if b == "quit" || b == "help" {
                 Ordering::Less
+            } else if a == "help" {
+                Ordering::Greater
             } else {
                 a.cmp(&b)
             }
@@ -722,25 +727,25 @@ mod tests {
         };
 
         GLOBAL_CLAP_SETTINGS.iter().for_each(|&s| {
-            assert!(matcher.clap.p.subcommands[0].p.is_set(s));
-            assert!(matcher.clap.p.subcommands[0].p.subcommands[0].p.is_set(s));
-            assert!(matcher.clap.p.subcommands[0].p.subcommands[1].p.is_set(s));
+            assert!(matcher.clap.p.subcommands[2].p.is_set(s));
+            assert!(matcher.clap.p.subcommands[2].p.subcommands[0].p.is_set(s));
+            assert!(matcher.clap.p.subcommands[2].p.subcommands[1].p.is_set(s));
         });
 
         assert_eq!(
-            matcher.clap.p.subcommands[0].p.meta.template,
+            matcher.clap.p.subcommands[2].p.meta.template,
             Some(config.subcommand_help_template)
         );
 
         assert_eq!(
-            matcher.clap.p.subcommands[0].p.subcommands[0]
+            matcher.clap.p.subcommands[2].p.subcommands[0]
                 .p
                 .meta
                 .template,
             Some(config.subcommand_help_template)
         );
         assert_eq!(
-            matcher.clap.p.subcommands[0].p.subcommands[1]
+            matcher.clap.p.subcommands[2].p.subcommands[1]
                 .p
                 .meta
                 .template,
@@ -1102,7 +1107,7 @@ mod tests {
             .complete("prog help ", 10, &Context::new(&History::new()))
             .unwrap();
 
-        assert_eq!(result.0, 4);
+        assert_eq!(result.0, 10);
         assert_eq!(result.1.len(), 0);
     }
 
@@ -1117,7 +1122,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.0, 5);
-        assert_eq!(result.1.len(), 1);
+        assert_eq!(result.1.len(), 2);
         assert_eq!(result.1[0], "slaps");
     }
 
@@ -1132,7 +1137,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.0, 0);
-        assert_eq!(result.1.len(), 1);
+        assert_eq!(result.1.len(), 3);
         assert_eq!(result.1[0], "prog");
     }
 
@@ -1491,11 +1496,9 @@ mod tests {
 
     #[test]
     fn test_clap_completion_quit_command_last() {
-        let quit = clap::App::new("quit");
         let app = clap::App::new("prog");
         let slap = clap::App::new("slaps");
         let mut slaps = Matcher::with_name_and_config("slaps", Config::default());
-        slaps.register_command(quit);
         slaps.register_command(slap);
         slaps.register_command(app);
 
@@ -1504,10 +1507,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.0, 0);
-        assert_eq!(result.1.len(), 3);
+        assert_eq!(result.1.len(), 4);
         assert_eq!(result.1[0], "prog");
         assert_eq!(result.1[1], "slaps");
-        assert_eq!(result.1[2], "quit");
+        assert_eq!(result.1[2], "help");
+        assert_eq!(result.1[3], "quit");
     }
 
     #[test]
