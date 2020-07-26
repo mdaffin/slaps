@@ -56,7 +56,7 @@ impl<'a, 'b> Matcher<'a, 'b> {
         };
 
         m.register_command_with_handler(
-            App::new("quit").alias("exit"),
+            App::new("quit").alias("exit").about("Exits the program"),
             Box::new(|_| Err(ExecutionError::GracefulExit)),
         );
         m.clap.p.create_help_and_version();
