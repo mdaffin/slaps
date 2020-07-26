@@ -78,7 +78,7 @@ pub enum Error {
     WindowResize,
     /// Like Utf8Error on unix
     #[cfg(windows)]
-    Decode(char::DecodeUtf16Error),
+    Decode(std::char::DecodeUtf16Error),
 }
 
 impl Display for Error {
