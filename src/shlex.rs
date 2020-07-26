@@ -165,21 +165,24 @@ pub trait FieldMatcher {
 
 impl FieldMatcher for [Field<'_>] {
     fn split_at_pos(&self, pos: usize) -> (&[Field<'_>], Option<&Field<'_>>, &[Field<'_>]) {
-        if let Some(at_cursor) = self
-            .iter()
+        self.iter()
             .position(|w| w.position.start < pos && w.position.end >= pos)
-        {
-            (
-                &self[..at_cursor],
-                self.get(at_cursor),
-                &self[at_cursor + 1..],
+            .map_or(
+                self.iter().position(|w| w.position.start >= pos).map_or(
+                    (self, None, &[]),
+                    |split_pos| {
+                        let (before, after) = self.split_at(split_pos);
+                        (before, None, after)
+                    },
+                ),
+                |at_cursor| {
+                    (
+                        &self[..at_cursor],
+                        self.get(at_cursor),
+                        &self[at_cursor + 1..],
+                    )
+                },
             )
-        } else if let Some(split_pos) = self.iter().position(|w| w.position.start >= pos) {
-            let (before, after) = self.split_at(split_pos);
-            (before, None, after)
-        } else {
-            (self, None, &[])
-        }
     }
 
     fn has_double_dash(&self) -> bool {
