@@ -249,6 +249,18 @@ impl Default for Config<'_> {
     }
 }
 
+impl Into<rustyline::Config> for Config<'_> {
+    fn into(self) -> rustyline::Config {
+        use rustyline::config::OutputStreamType::Stderr;
+        rustyline::Config::builder()
+            .color_mode(self.color_mode.into())
+            .completion_type(self.completion_type.into())
+            .output_stream(Stderr)
+            .tab_stop(4)
+            .build()
+    }
+}
+
 /// Colorization mode.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ColorMode {
@@ -266,6 +278,17 @@ impl Default for ColorMode {
     }
 }
 
+impl Into<rustyline::ColorMode> for ColorMode {
+    fn into(self) -> rustyline::ColorMode {
+        use rustyline::config::ColorMode::{Disabled, Enabled, Forced};
+        match self {
+            ColorMode::Forced => Forced,
+            ColorMode::Enabled => Enabled,
+            ColorMode::Disabled => Disabled,
+        }
+    }
+}
+
 /// Tab completion style.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum CompletionType {
@@ -280,6 +303,17 @@ pub enum CompletionType {
 impl Default for CompletionType {
     fn default() -> Self {
         CompletionType::Circular
+    }
+}
+
+impl Into<rustyline::CompletionType> for CompletionType {
+    fn into(self) -> rustyline::CompletionType {
+        use rustyline::CompletionType::{Circular, List};
+
+        match self {
+            CompletionType::Circular => Circular,
+            CompletionType::List => List,
+        }
     }
 }
 

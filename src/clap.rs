@@ -5,18 +5,18 @@
  */
 
 use crate::shlex::{split, Field, FieldMatcher, FieldType};
-use crate::{Config, ExecutionError, MismatchedQuotes};
+use crate::{Config, MismatchedQuotes};
 use clap::ArgSettings;
 pub use clap::{App, AppSettings, ArgMatches, ErrorKind};
 use itertools::Itertools;
 use rustyline::completion::Completer;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
-use rustyline::Context;
+use rustyline::validate::Validator;
+use rustyline::{Context, Helper};
 use std::borrow::Cow;
 use std::borrow::Cow::Borrowed;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt::Write;
 use std::fmt::{Debug, Display, Formatter};
@@ -32,78 +32,39 @@ const GLOBAL_CLAP_SETTINGS: &[AppSettings] = &[
     AppSettings::VersionlessSubcommands,
 ];
 
-/// Handler function for a command.
-type Handler<'a> = Box<dyn 'a + Fn(&clap::ArgMatches) -> Result<(), ExecutionError> + Send + Sync>;
-
 /// Uses `clap` to parse arguments for registered commands and provide completions.
 pub(crate) struct Matcher<'a, 'b> {
     clap: App<'a, 'b>,
     config: Config<'b>,
-    handlers: HashMap<String, Handler<'b>>,
 }
 
 impl<'a, 'b> Matcher<'a, 'b> {
     /// Initialises clap with settings suitable for interactive usage.
     #[must_use]
     pub fn with_name_and_config(name: &str, config: Config<'b>) -> Self {
-        let mut m = Matcher {
+        Matcher {
             clap: App::new(name)
                 .global_settings(GLOBAL_CLAP_SETTINGS)
                 .setting(AppSettings::NoBinaryName)
                 .template(config.help_template),
             config,
-            handlers: HashMap::new(),
-        };
-
-        m.register_command_with_handler(
-            App::new("quit").alias("exit").about("Exits the program"),
-            Box::new(|_| Err(ExecutionError::GracefulExit)),
-        );
-        m.clap.p.create_help_and_version();
-        m.clap.p.set(AppSettings::DisableHelpSubcommand);
-
-        m
+        }
     }
 
     /// Registers a subcommand with clap.
-    #[cfg(test)]
     pub fn register_command(&mut self, mut subcommand: App<'a, 'b>) {
         // Override settings to make suitable for interactive use.
         self.apply_global_settings(&mut subcommand);
         // Register with clap.
         self.clap.p.add_subcommand(subcommand);
-    }
-
-    pub fn register_command_with_handler(
-        &mut self,
-        mut subcommand: App<'a, 'b>,
-        handler: Handler<'b>,
-    ) {
-        self.handlers
-            .insert(subcommand.get_name().to_string(), handler);
-        // Override settings to make suitable for interactive use.
-        self.apply_global_settings(&mut subcommand);
-        // Register with clap.
-        self.clap.p.add_subcommand(subcommand);
+        // Create root help command once.
+        self.clap.p.create_help_and_version();
+        self.clap.p.set(AppSettings::DisableHelpSubcommand);
     }
 
     /// Parses the given word slice using clap to return an `ArgMatches` object.
     pub fn get_matches<T: AsRef<OsStr>>(&mut self, input: &[T]) -> Result<ArgMatches, Error> {
         Ok(self.clap.get_matches_from_safe_borrow(input)?)
-    }
-
-    // Parses the given word slice and executes the matched command's handler.
-    pub fn handle_matches<T: AsRef<OsStr>>(&mut self, input: &[T]) -> Result<(), crate::Error> {
-        let matches = self.clap.get_matches_from_safe_borrow(input)?;
-        if let Some(subcommand) = matches.subcommand_name() {
-            if let (Some(handler), Some(subcommand_matches)) = (
-                self.handlers.get_mut(subcommand),
-                matches.subcommand_matches(subcommand),
-            ) {
-                handler(subcommand_matches)?;
-            }
-        }
-        unreachable!()
     }
 
     pub fn command_from_input<'c>(
@@ -307,10 +268,9 @@ impl Debug for Matcher<'_, '_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "clap::Matcher {{name = {:?}, config = {:?}, commands = {:?}}}",
+            "clap::Matcher {{name = {:?}, config = {:?}}}",
             self.clap.get_name(),
             self.config,
-            self.handlers.keys()
         )
     }
 }
@@ -473,19 +433,19 @@ impl Highlighter for Matcher<'_, '_> {
     }
 }
 
+impl Validator for Matcher<'_, '_> {}
+
+impl Helper for Matcher<'_, '_> {}
+
 fn get_subcommands_names(app: &clap::App) -> impl Iterator<Item = String> {
     app.p
         .subcommands
         .iter()
         .map(|s| s.p.meta.name.clone())
-        .sorted_by(|a, b| {
-            if b == "quit" || b == "help" {
-                Ordering::Less
-            } else if a == "help" {
-                Ordering::Greater
-            } else {
-                a.cmp(&b)
-            }
+        .sorted_by(|a, b| match (a.as_str(), b.as_str()) {
+            ("quit", _) | ("help", _) => Ordering::Greater,
+            (_, "help") | (_, "quit") => Ordering::Less,
+            (_, _) => a.cmp(&b),
         })
 }
 
@@ -710,7 +670,7 @@ impl From<clap::Error> for Error {
 mod tests {
     use crate::clap::{Matcher, GLOBAL_CLAP_SETTINGS};
     use crate::shlex::split;
-    use crate::{Config, ExecutionError};
+    use crate::Config;
     use clap::{App, AppSettings, Arg, ErrorKind, SubCommand};
     use rustyline::completion::Completer;
     use rustyline::highlight::Highlighter;
@@ -767,25 +727,25 @@ mod tests {
         };
 
         GLOBAL_CLAP_SETTINGS.iter().for_each(|&s| {
-            assert!(matcher.clap.p.subcommands[2].p.is_set(s));
-            assert!(matcher.clap.p.subcommands[2].p.subcommands[0].p.is_set(s));
-            assert!(matcher.clap.p.subcommands[2].p.subcommands[1].p.is_set(s));
+            assert!(matcher.clap.p.subcommands[0].p.is_set(s));
+            assert!(matcher.clap.p.subcommands[0].p.subcommands[0].p.is_set(s));
+            assert!(matcher.clap.p.subcommands[0].p.subcommands[1].p.is_set(s));
         });
 
         assert_eq!(
-            matcher.clap.p.subcommands[2].p.meta.template,
+            matcher.clap.p.subcommands[0].p.meta.template,
             Some(config.subcommand_help_template)
         );
 
         assert_eq!(
-            matcher.clap.p.subcommands[2].p.subcommands[0]
+            matcher.clap.p.subcommands[0].p.subcommands[0]
                 .p
                 .meta
                 .template,
             Some(config.subcommand_help_template)
         );
         assert_eq!(
-            matcher.clap.p.subcommands[2].p.subcommands[1]
+            matcher.clap.p.subcommands[0].p.subcommands[1]
                 .p
                 .meta
                 .template,
@@ -1191,7 +1151,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.0, 0);
-        assert_eq!(result.1.len(), 3);
+        assert_eq!(result.1.len(), 2);
         assert_eq!(result.1[0], "prog");
     }
 
@@ -1551,9 +1511,11 @@ mod tests {
     #[test]
     fn test_clap_completion_quit_command_last() {
         let app = clap::App::new("prog");
+        let quit = clap::App::new("quit");
         let slap = clap::App::new("slaps");
         let mut slaps = Matcher::with_name_and_config("slaps", Config::default());
         slaps.register_command(slap);
+        slaps.register_command(quit);
         slaps.register_command(app);
 
         let result = slaps
@@ -2299,50 +2261,5 @@ mod tests {
                 &config.highlighter_style_command.underline().paint("slaps"),
             )
         );
-    }
-
-    #[test]
-    fn test_clap_executes_handler() {
-        let app = clap::App::new("slaps").arg(
-            Arg::with_name("this")
-                .long("this")
-                .takes_value(true)
-                .required(true),
-        );
-        let config = Config::default().highlighter_underline_word_under_cursor(true);
-        let mut slaps = Matcher::with_name_and_config("slaps", config);
-        slaps.register_command_with_handler(
-            app,
-            Box::new(|args| {
-                assert_eq!(args.value_of("this"), Some("arg"));
-                Err(ExecutionError::GracefulExit)
-            }),
-        );
-
-        let result = slaps.handle_matches(&split("slaps --this arg").unwrap());
-
-        assert!(result.is_err());
-        assert!(matches!(
-            result,
-            Err(crate::Error::ExecutionError(ExecutionError::GracefulExit))
-        ));
-    }
-
-    #[test]
-    fn test_clap_handler_propagates_clap_errors() {
-        let app = clap::App::new("slaps").arg(
-            Arg::with_name("this")
-                .long("this")
-                .takes_value(true)
-                .required(true),
-        );
-        let config = Config::default().highlighter_underline_word_under_cursor(true);
-        let mut slaps = Matcher::with_name_and_config("slaps", config);
-        slaps.register_command_with_handler(app, Box::new(|_| unreachable!()));
-
-        let result = slaps.handle_matches(&split("slaps --that arg").unwrap());
-
-        assert!(result.is_err());
-        assert!(matches!(result, Err(crate::Error::ClapError(_))));
     }
 }
