@@ -331,7 +331,7 @@ impl Completer for Matcher<'_, '_> {
             Ok(f) => f,
             Err(MismatchedQuotes(quotes_pos)) => {
                 return if pos == line.len() {
-                    let candidate = String::from(line.chars().nth(quotes_pos).unwrap());
+                    let candidate = line.chars().nth(quotes_pos).unwrap().to_string();
                     Ok((pos, vec![candidate]))
                 } else {
                     Ok((0, Vec::with_capacity(0)))
@@ -363,7 +363,7 @@ impl Hinter for Matcher<'_, '_> {
                 }
             }
             Err(MismatchedQuotes(quotes_pos)) => {
-                return Some(String::from(line.chars().nth(quotes_pos).unwrap()));
+                return Some(line.chars().nth(quotes_pos).unwrap().to_string());
             }
         }
         None
