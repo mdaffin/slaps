@@ -33,6 +33,8 @@ pub struct Config<'a> {
     pub highlighter_style_mismatched_quotes: Style,
     /// Whether to underline the word currently under cursor while editing.
     pub highlighter_underline_word_under_cursor: bool,
+    /// Automatically add commands to history.
+    pub history_auto_add: bool,
 }
 
 impl<'a> Config<'a> {
@@ -228,6 +230,22 @@ impl<'a> Config<'a> {
         self.highlighter_underline_word_under_cursor = underline;
         self
     }
+
+    /// Enables or disables automatically adding all commands to the history buffer.
+    ///
+    /// # Examples
+    /// ```
+    /// use slaps::Config;
+    /// use ansi_term::Color;
+    ///
+    /// let config = Config::default().history_auto_add(false);
+    /// # assert_eq!(config.history_auto_add, false);
+    /// ```
+    #[must_use]
+    pub fn history_auto_add(mut self, auto: bool) -> Self {
+        self.history_auto_add = auto;
+        self
+    }
 }
 
 impl Default for Config<'_> {
@@ -245,6 +263,7 @@ impl Default for Config<'_> {
             highlighter_style_mismatched_quotes: Color::Red.normal(),
             highlighter_style_value: Color::Green.normal(),
             highlighter_underline_word_under_cursor: true,
+            history_auto_add: true,
         }
     }
 }
@@ -255,6 +274,7 @@ impl Into<rustyline::Config> for Config<'_> {
         rustyline::Config::builder()
             .color_mode(self.color_mode.into())
             .completion_type(self.completion_type.into())
+            .auto_add_history(self.history_auto_add)
             .output_stream(Stderr)
             .tab_stop(4)
             .build()
@@ -339,6 +359,7 @@ mod tests {
                 highlighter_style_mismatched_quotes: Color::Red.normal(),
                 highlighter_style_value: Color::Green.normal(),
                 highlighter_underline_word_under_cursor: true,
+                history_auto_add: true,
             }
         );
     }

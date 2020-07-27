@@ -282,6 +282,7 @@ mod tests {
         let readline_config = slaps.editor.config_mut();
         assert_eq!(readline_config.color_mode(), ColorMode::Disabled);
         assert_eq!(readline_config.completion_type(), CompletionType::List);
+        assert_eq!(readline_config.auto_add_history(), config.history_auto_add);
         assert_eq!(readline_config.tab_stop(), 4);
         assert_eq!(readline_config.output_stream(), OutputStreamType::Stderr);
     }
