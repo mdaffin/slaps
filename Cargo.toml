@@ -8,7 +8,7 @@ license = "WTFPL"
 name = "slaps"
 readme = "README.md"
 repository = "https://github.com/tjg1/slaps"
-version = "0.2.2"
+version = "0.2.3"
 
 [dependencies]
 ansi_term = "^0.12.1"
