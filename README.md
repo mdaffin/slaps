@@ -18,16 +18,16 @@ This:
 use slaps::Slaps;
 
 // Using structopt
-Slaps::with_name("scrooge")
-    .subcommand(RekeyCommand::clap(), |args| Ok(()))
-    .subcommand(AccountCommand::clap(), |args| Ok(()))
-    .subcommand(UndoCommand::clap(), |args| Ok(()))
+Slaps::with_name("slaps")
+    .command(RekeyCommand::clap(), |args| Ok(()))
+    .command(AccountCommand::clap(), |args| Ok(()))
+    .command(UndoCommand::clap(), |args| Ok(()))
     .run()?;
 ```
 
 Gets you this:
 
-![Terminal screenshot](https://files.catbox.moe/h6o7rk.png)
+![Terminal screenshot](https://files.catbox.moe/rc4ch7.png)
 
 Zero extra configuration needed.
 
