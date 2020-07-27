@@ -6,6 +6,7 @@
 
 use crate::shlex::{split, Field, FieldMatcher, FieldType};
 use crate::{Config, MismatchedQuotes};
+use ansi_term::Style;
 use clap::ArgSettings;
 pub use clap::{App, AppSettings, ArgMatches, ErrorKind};
 use itertools::Itertools;
@@ -315,11 +316,12 @@ impl Hinter for Matcher<'_, '_> {
             Ok(fields) => {
                 let (_, completions) = self.complete_fields(&fields, pos);
                 if completions.len() == 1 {
-                    return if let (_, Some(at_cursor), _) = fields.split_at_pos(pos) {
-                        Some(completions[0][at_cursor.parsed.len()..].to_string())
+                    let hint = if let (_, Some(at_cursor), _) = fields.split_at_pos(pos) {
+                        &completions[0][at_cursor.parsed.len()..]
                     } else {
-                        Some(completions.into_iter().next().unwrap())
+                        completions[0].as_str()
                     };
+                    return Some(hint.to_string());
                 }
             }
             Err(MismatchedQuotes(quotes_pos)) => {
@@ -429,6 +431,14 @@ impl Highlighter for Matcher<'_, '_> {
             // Add remaining un-highlighted substring.
             highlighted.push_str(&line[highlighted_pos..]);
             Cow::from(highlighted)
+        }
+    }
+
+    fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
+        if hint.trim().is_empty() {
+            Borrowed(hint)
+        } else {
+            Cow::from(Style::new().dimmed().paint(hint).to_string())
         }
     }
 }
