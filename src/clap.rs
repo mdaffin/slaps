@@ -24,8 +24,7 @@ use std::fmt::{Debug, Display, Formatter};
 
 // Clap settings suited for interactive usage. Set for all subcommands.
 const GLOBAL_CLAP_SETTINGS: &[AppSettings] = &[
-    #[cfg(test)]
-    AppSettings::ColorNever,
+    AppSettings::ColoredHelp,
     AppSettings::DisableVersion,
     AppSettings::DisableHelpFlags,
     AppSettings::InferSubcommands,
@@ -47,6 +46,7 @@ impl<'a, 'b> Matcher<'a, 'b> {
             clap: App::new(name)
                 .global_settings(GLOBAL_CLAP_SETTINGS)
                 .setting(AppSettings::NoBinaryName)
+                .setting(config.color_mode.into())
                 .template(config.help_template),
             config,
         }

@@ -294,7 +294,11 @@ pub enum ColorMode {
 
 impl Default for ColorMode {
     fn default() -> Self {
-        ColorMode::Enabled
+        if cfg!(test) {
+            ColorMode::Disabled
+        } else {
+            ColorMode::Enabled
+        }
     }
 }
 
@@ -305,6 +309,16 @@ impl Into<rustyline::ColorMode> for ColorMode {
             ColorMode::Forced => Forced,
             ColorMode::Enabled => Enabled,
             ColorMode::Disabled => Disabled,
+        }
+    }
+}
+
+impl Into<::clap::AppSettings> for ColorMode {
+    fn into(self) -> ::clap::AppSettings {
+        match self {
+            ColorMode::Forced => ::clap::AppSettings::ColorAlways,
+            ColorMode::Enabled => ::clap::AppSettings::ColorAuto,
+            ColorMode::Disabled => ::clap::AppSettings::ColorNever,
         }
     }
 }
@@ -347,7 +361,7 @@ mod tests {
         assert_eq!(
             Config::default(),
             Config {
-                color_mode: ColorMode::Enabled,
+                color_mode: ColorMode::Disabled,
                 completion_type: CompletionType::Circular,
                 prompt: "> ",
                 password_prompt: "Password: ",
